@@ -300,27 +300,31 @@ class Api_provider(SQLModel, table=True):
         return score
 
 
-def weighted_random(options):
-    # return the index of a randomly-chosen list item with the probability represented by the value
-    total = sum(options)
-    for i, weight in enumerate(options):
+def weighted_random(options: dict):
+    # return a randomly-chosen key with the probability represented by its value
+    total = sum(options.values())
+    for k, weight in options.items():
         if random.randint(0, total - 1) < weight:
-            return i
+            return k
         total -= weight
     assert False, f"bug in weighted_random, options {options}"
+    # #test:
+    # o = {200: 5, 202: 10, 203: 11, 210: 1, 214: 10}
+    # n = 1000  # number of iterations
+    # h = [k for k in [weighted_random(o) for i in range(n*sum(o.values()))]]
+    # r = dict(sorted({i:h.count(i)/n for i in h}.items()))
+    # #visually compare o and r
 
 
 async def main():
     with Session(engine) as db_session:
-        provider_scores = list()
-        provider_ids = list()
+        scores = dict()
         all_providers = db_session.exec(select(Api_provider))
         for p in all_providers:
             score = p.score()
             if score <= 0:
                 continue
-            provider_scores.append(score)
-            provider_ids.append(p.id)
+            scores[p.id] = score
         # choose some providers at random
         jobs = list()
         thechosen = list()
@@ -330,18 +334,17 @@ async def main():
         ) as aio_session:
             logger.info(f"{options.minimum_match + 1} requests:")
             while True:
-                chosen_i = weighted_random(provider_scores)
-                statement = select(Api_provider).where(Api_provider.id == provider_ids[chosen_i])
-                chosen_p = db_session.exec(statement).one_or_none()
-                assert chosen_p is not None
-                del provider_scores[chosen_i]  # ensure we don't choose this one again
-                del provider_ids[chosen_i]
-                thechosen.append(chosen_p)
-                jobs.append(asyncio.ensure_future(get_ip(chosen_p.url(), aio_session)))
+                p_id = weighted_random(scores)
+                statement = select(Api_provider).where(Api_provider.id == p_id)
+                p = db_session.exec(statement).one_or_none()
+                assert p is not None
+                del scores[p_id]  # ensure we don't choose this one again
+                thechosen.append(p)
+                jobs.append(asyncio.ensure_future(get_ip(p.url(), aio_session)))
                 await asyncio.sleep(0.0001)
                 if len(jobs) >= options.minimum_match + 1:
                     break
-                assert len(provider_scores) > 0, "not enough providers for options.minimum_match"
+                assert len(scores) > 0, "not enough providers for options.minimum_match"
             responses = await asyncio.gather(*jobs)
             assert len(thechosen) == len(responses)
             assert len(thechosen) == options.minimum_match + 1
