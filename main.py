@@ -33,6 +33,22 @@ parser.add_option(
     help="minimum number of identical responses, default is 2",
 )
 parser.add_option(
+    "-o",
+    "--overkill",
+    action="store",
+    type="int",
+    default=0,
+    help="number of requests to make beyond minimum-match, default is 0",
+)
+parser.add_option(
+    "-g",
+    "--give-up-after",
+    action="store",
+    type="int",
+    default=10,
+    help="maximum number of failed requests allowed, default is 10",
+)
+parser.add_option(
     "-l",
     "--logfile",
     action="store",
@@ -111,8 +127,10 @@ async def http_get(url, session, max_size=-1):
             # SQLite max int is 2^63 ms, or 500000 requests per second for 100 years
             ms = round((timer_marks[1] - timer_marks[0]) * 1000)
             return html, ms
-    except aiohttp.ClientError as e:
-        raise ValueError(str(e))
+    # exceptions here seem to cause infinite loop (¿bug in my code?), e.g. trying "httpss://" url
+    except Exception as e:  # most will be aiohttp.ClientError
+        s = str(e)
+        raise ValueError(s if len(s) > 1 else "Unknown exception in http_get()")
 
 
 class Parrot(SQLModel, table=True):  # data for one interface of an API provider
@@ -198,33 +216,37 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
 
 @dataclass
 class FetchedIP:
-    url: str = ''  # URL of server
+    parrot: Parrot
     ip: str = ''  # IP address returned by server or error message
     rtt: int = 0  # total milliseconds needed for request or 0 for error
 
 
-async def get_ip(url, session):
-    fip = FetchedIP()
-    fip.url = url
+async def get_ip(p: Parrot, session, q: asyncio.Queue) -> None:
+    url = p.url()
+    logger.debug(f"get_ip('{url}') begin")
+    fip = FetchedIP(p)
+    a = None
     try:
         html, ms = await http_get(url, session, max_size=16384)  # don't download it all
     except ValueError as e:
-        fip.ip = str(e)
-        return fip
-    if len(html) < 3:
-        fip.ip = f"Only {len(html)} bytes received"
-        return fip
-    ip = GrepIPs.grep_ips(html, global_ips_only=True, first_match_only=True)
-    if ip is None:
+        a = str(e)
+    if a is None and len(html) < 3:
+        a = f"Only {len(html)} bytes received"
+    if a is None:
+        ip = GrepIPs.grep_ips(html, global_ips_only=True, first_match_only=True)
+        if ip is not None:
+            a = str(ip)
+            fip.rtt = ms
+    if a is None:
+        # call grep_ips() again to be able to give a more specific error message
         ip = GrepIPs.grep_ips(html, global_ips_only=False, first_match_only=True)
         if ip is None:
-            fip.ip = "No IP address found"
+            a = "No IP address found"
         else:
-            fip.ip = f"Found non-global IP address {ip}"
-        return fip
-    fip.ip = str(ip)
-    fip.rtt = ms
-    return fip
+            a = f"Found non-global IP address {ip}"
+    logger.debug(f"get_ip('{url}') end:  {a}")
+    fip.ip = a
+    await q.put(fip)
 
 
 class Ptask(Enum):
@@ -279,7 +301,7 @@ parrot_data = '''
 34 api.iplocation.net/?ip={ip}                       N     # https://api.iplocation.net/
 35 ipinfo.io/ip                                I J
 36 ipinfo.io/{ip}/json                               N
-37 api.ipregistry.co/?key=tryout                 J   N     # https://ipregistry.co/docs/
+37 api.ipregistry.co/?key=tryout               I J   N     # https://ipregistry.co/docs/
 38 myexternalip.com/raw                        I J
 39 checkip.amazonaws.com/                      I J
 40 diagnostic.opendns.com/myip                             # cannot connect
@@ -326,55 +348,74 @@ async def main():
             if score <= 0:
                 continue
             scores[p.id] = score
-        # choose some parrots at random
-        jobs = list()
-        thechosen = list()
+        q = asyncio.Queue()  # great tutorial: https://realpython.com/async-io-python/
         connector = aiohttp.TCPConnector(limit=10)  # limit total number of simultaneous connections
         async with aiohttp.ClientSession(
             connector=connector, timeout=http_timeout(), trace_configs=[http_timer()]
         ) as aio_session:
-            logger.info(f"{options.minimum_match + 1} requests:")
-            while True:
-                p_id = weighted_random(scores)
-                statement = select(Parrot).where(Parrot.id == p_id)
-                p = db_session.exec(statement).one_or_none()
-                assert p is not None
-                del scores[p_id]  # ensure we don't choose this one again
-                thechosen.append(p)
-                jobs.append(asyncio.ensure_future(get_ip(p.url(), aio_session)))
-                await asyncio.sleep(0.0001)
-                if len(jobs) >= options.minimum_match + 1:
+            logger.info(f"requests (need {options.minimum_match} matches):")
+            pending_jobs_count = 0
+            ip_counts = dict()  # number of occurrences for each received IP
+            fail_count = 0
+            while True:  # spawn and collect jobs
+                max_ip_count = 0 if len(ip_counts) == 0 else max(ip_counts.values())
+                # FIXME: for multiple IPs, maybe ensure most_common >= second_most_common + minimum_match more
+                if len(ip_counts) > 1:
+                    logger.error(f"multiple IPs received: {ip_counts}")
                     break
-                assert len(scores) > 0, "not enough parrots for options.minimum_match"
-            responses = await asyncio.gather(*jobs)
-            assert len(thechosen) == len(responses)
-            assert len(thechosen) == options.minimum_match + 1
-            ip_counts = dict()
-            for i, r in enumerate(responses):  # update DB with response results
-                assert r.url == thechosen[i].url()
-                thechosen[i].attempt_count += 1
-                if r.rtt != 0:  # got valid IP
-                    ip_counts[r.ip] = ip_counts.get(r.ip, 0) + 1
-                    thechosen[i].success_count += 1
-                    thechosen[i].total_rtt += r.rtt
-                    portion = f"{thechosen[i].success_count} of {thechosen[i].attempt_count}"
-                    logger.info(f"    {r.url} → {r.ip} ({r.rtt} ms; {portion} succeeded)")
-                else:
-                    thechosen[i].last_errmsg = r.ip
-                    portion = f"{thechosen[i].success_count} of {thechosen[i].attempt_count}"
-                    logger.info(f"    {r.url} → {r.ip[:40]} ({portion} succeeded)")
-                db_session.add(thechosen[i])
-                db_session.commit()
-            keys = list(ip_counts.keys())
-            if len(keys) > 1:
-                logger.error(f"multiple IPs received: {ip_counts}")
-            elif ip_counts[keys[0]] < options.minimum_match:
-                logger.warning(
-                    f"{options.minimum_match} matches requested; only {ip_counts[keys[0]]} received"
-                )
-            else:
-                logger.info(f"IP: {keys[0]} (received {ip_counts[keys[0]]} times)")
-                print(keys[0])
+                if max_ip_count >= options.minimum_match:  # we have sufficient results
+                    ip = max(ip_counts, key=ip_counts.get)
+                    msg = f"IP found: {ip}"
+                    logger.info(f"{msg} ({ip_counts[ip]} successes, {fail_count} failures)")
+                    print(ip)
+                    break
+                # spawn another get_ip() job if needed
+                wanted_count = options.minimum_match + options.overkill
+                jobs_count = max_ip_count + pending_jobs_count
+                if options.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
+                    msg = f"not enough parrots for {wanted_count} requests"
+                    logger.warning(f"{msg}; ignoring '--overkill'")
+                    options.overkill = 0
+                if options.minimum_match + options.overkill > jobs_count:
+                    if len(scores) == 0:
+                        logger.error(f"not enough parrots for {options.minimum_match} matches")
+                        break
+                    p_id = weighted_random(scores)
+                    statement = select(Parrot).where(Parrot.id == p_id)
+                    p = db_session.exec(statement).one_or_none()
+                    assert p is not None
+                    del scores[p_id]  # ensure we don't choose this one again
+                    # FIXME: ¿delete other scores[] for the same service?
+                    asyncio.create_task(get_ip(p, aio_session, q))
+                    pending_jobs_count += 1
+                await asyncio.sleep(0.0001)
+                # process completed jobs
+                try:
+                    # r: FetchedIP = await q.get_nowait()
+                    r: FetchedIP = q.get_nowait()
+                    r.parrot.attempt_count += 1
+                    if r.rtt != 0:  # got valid IP
+                        ip_counts[r.ip] = ip_counts.get(r.ip, 0) + 1
+                        r.parrot.success_count += 1
+                        r.parrot.total_rtt += r.rtt
+                        portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
+                        logger.info(
+                            f"    {r.parrot.url()} → {r.ip} ({r.rtt} ms; {portion} succeeded)"
+                        )
+                    else:
+                        r.parrot.last_errmsg = r.ip
+                        portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
+                        logger.info(f"    {r.parrot.url()} → {r.ip[:40]} ({portion} succeeded)")
+                        fail_count += 1
+                    pending_jobs_count -= 1
+                    db_session.add(r.parrot)
+                    db_session.commit()
+                    if fail_count >= options.give_up_after:
+                        logger.error(f"{fail_count} requests failed; giving up")
+                        break
+                except asyncio.QueueEmpty:
+                    pass
+                await asyncio.sleep(0.0001)
         connector.close()
 
 
