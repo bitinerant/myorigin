@@ -115,6 +115,87 @@ async def http_get(url, session, max_size=-1):
         raise ValueError(str(e))
 
 
+class Parrot(SQLModel, table=True):  # data for one interface of an API provider
+    # (Parrots repeats what they hear. A my-IP API provider repeats the callers IP back to them.)
+    id: int = Field(primary_key=True)
+    ptask: str  # one of: 'I', 'J', 'D', 'S', 'M', 'N'
+    address: str  # host+path (URL without protocol)
+    milliweight: int = 1000  # 2000 means 2x more likely to be used; 0 means disabled
+    attempt_count: int = 0  # number of attempted connections
+    success_count: int = 0  # number of valid IP addresses returned
+    total_rtt: int = 0  # total rtt (in ms) for all successful attempts
+    last_errmsg: str = ""
+
+    @staticmethod
+    def startup():
+        # with Session(engine) as session:
+        #     parrot_count = session.query(Parrot).count()
+        # if parrot_count == 0:  # empty database
+        with Session(engine) as session:
+            for line in parrot_data.split('\n'):
+                wout_comments = re.sub(
+                    r'( +|^)#.*\n?', '', line
+                )  # strip comments and preceding spaces
+                if len(wout_comments) == 0:
+                    continue
+                fields = re.sub(r' +', ' ', wout_comments).split(' ')
+                assert len(fields) >= 2, f"invalid parrot_data line: {line}"
+                # do not adjust the Ptask list here except to append; .id is computed from it
+                for i, ptask in enumerate([Ptask.IP_HTTP, Ptask.IP_HTTPS]):
+                    # uniquely id each row so we can safely copy future changes
+                    id = 2018264000 + int(fields[0]) * 10 + i
+                    address = fields[1]
+                    statement = select(Parrot).where(Parrot.id == id)
+                    result = session.exec(statement).one_or_none()
+                    if result is None:  # no existing row in DB
+                        if ptask.value not in fields[2:]:  # Ptask inactive
+                            continue
+                        result = Parrot()  # add new row to database for this Ptask
+                        result.id = id
+                    else:  # existing row in DB
+                        if ptask.value not in fields[2:]:  # Ptask inactive
+                            result.milliweight = 0  # disable Ptask in DB
+                        else:
+                            result.milliweight = 1000
+                    result.ptask = ptask.value
+                    result.address = address
+                    session.add(result)
+            session.commit()
+
+    def url(self):
+        if self.ptask == Ptask.IP_HTTP.value:
+            return 'http://' + self.address
+        if self.ptask == Ptask.IP_HTTPS.value:
+            return 'https://' + self.address
+        assert ValueError, f"Ptask {Ptask(self.ptask).name} not yet implemented"
+
+    def score(self):  # compute a score which will determine how likely it is to be chosen
+        logger.debug(f"{self.url()}:")
+        if self.attempt_count != 0:
+            percent = round(100.0 * self.success_count / self.attempt_count)
+            logger.debug(
+                f"    {percent}% success rate ({self.success_count} of {self.attempt_count})"
+            )
+        else:
+            percent = 100
+            logger.debug(f"    not yet attempted")
+        if self.success_count != 0:
+            average_ms = round(1.0 * self.total_rtt / self.success_count)
+            logger.debug(f"    {average_ms} ms average round trip time")
+        else:
+            average_ms = options.timeout
+        if len(self.last_errmsg) > 0:
+            logger.debug(f"    most recent error: {self.last_errmsg}")
+        score = percent  # biggest portion of score is success rate
+        score += 5  # every parrot gets a small chance of being selected
+        if self.attempt_count < 10:
+            score += 5  # prefer new parrots
+        score += round((options.timeout - average_ms) / 200)  # prefer faster parrots
+        score *= self.milliweight  # normally 1000, but can be 0 to disable or more to promote
+        logger.debug(f"    score: {score:,} points")
+        return score
+
+
 @dataclass
 class FetchedIP:
     url: str = ''  # URL of server
@@ -155,7 +236,7 @@ class Ptask(Enum):
     MD_HTTPS = 'N'  # get IP metadata via https (not yet implemented)
 
 
-provider_data = '''
+parrot_data = '''
 # **Do not change or reuse IDs** (first column) because they are used to revise rows in
 # existing databases.
 #
@@ -220,86 +301,6 @@ provider_data = '''
 '''
 
 
-class Api_provider(SQLModel, table=True):
-    id: int = Field(primary_key=True)
-    ptask: str  # one of: 'I', 'J', 'D', 'S', 'M', 'N'
-    address: str  # host+path (URL without protocol)
-    milliweight: int = 1000  # 2000 means 2x more likely to be used; 0 means disabled
-    attempt_count: int = 0  # number of attempted connections
-    success_count: int = 0  # number of valid IP addresses returned
-    total_rtt: int = 0  # total rtt (in ms) for all successful attempts
-    last_errmsg: str = ""
-
-    @staticmethod
-    def startup():
-        # with Session(engine) as session:
-        #     provider_count = session.query(Api_provider).count()
-        # if provider_count == 0:  # empty database
-        with Session(engine) as session:
-            for line in provider_data.split('\n'):
-                wout_comments = re.sub(
-                    r'( +|^)#.*\n?', '', line
-                )  # strip comments and preceding spaces
-                if len(wout_comments) == 0:
-                    continue
-                fields = re.sub(r' +', ' ', wout_comments).split(' ')
-                assert len(fields) >= 2, f"invalid provider_data line: {line}"
-                # do not adjust the Ptask list here except to append; .id is computed from it
-                for i, ptask in enumerate([Ptask.IP_HTTP, Ptask.IP_HTTPS]):
-                    # uniquely id each row so we can safely copy future changes
-                    id = 2018264000 + int(fields[0]) * 10 + i
-                    address = fields[1]
-                    statement = select(Api_provider).where(Api_provider.id == id)
-                    result = session.exec(statement).one_or_none()
-                    if result is None:  # no existing row in DB
-                        if ptask.value not in fields[2:]:  # Ptask inactive
-                            continue
-                        result = Api_provider()  # add new row to database for this Ptask
-                        result.id = id
-                    else:  # existing row in DB
-                        if ptask.value not in fields[2:]:  # Ptask inactive
-                            result.milliweight = 0  # disable Ptask in DB
-                        else:
-                            result.milliweight = 1000
-                    result.ptask = ptask.value
-                    result.address = address
-                    session.add(result)
-            session.commit()
-
-    def url(self):
-        if self.ptask == Ptask.IP_HTTP.value:
-            return 'http://' + self.address
-        if self.ptask == Ptask.IP_HTTPS.value:
-            return 'https://' + self.address
-        assert ValueError, f"Ptask {Ptask(self.ptask).name} not yet implemented"
-
-    def score(self):  # compute a score which will determine how likely it is to be chosen
-        logger.debug(f"{self.url()}:")
-        if self.attempt_count != 0:
-            percent = round(100.0 * self.success_count / self.attempt_count)
-            logger.debug(
-                f"    {percent}% success rate ({self.success_count} of {self.attempt_count})"
-            )
-        else:
-            percent = 100
-            logger.debug(f"    not yet attempted")
-        if self.success_count != 0:
-            average_ms = round(1.0 * self.total_rtt / self.success_count)
-            logger.debug(f"    {average_ms} ms average round trip time")
-        else:
-            average_ms = options.timeout
-        if len(self.last_errmsg) > 0:
-            logger.debug(f"    most recent error: {self.last_errmsg}")
-        score = percent  # biggest portion of score is success rate
-        score += 5  # every provider gets a small chance of being selected
-        if self.attempt_count < 10:
-            score += 5  # prefer new providers
-        score += round((options.timeout - average_ms) / 200)  # prefer faster providers
-        score *= self.milliweight  # normally 1000, but can be 0 to disable or more to promote
-        logger.debug(f"    score: {score:,} points")
-        return score
-
-
 def weighted_random(options: dict):
     # return a randomly-chosen key with the probability represented by its value
     total = sum(options.values())
@@ -319,13 +320,13 @@ def weighted_random(options: dict):
 async def main():
     with Session(engine) as db_session:
         scores = dict()
-        all_providers = db_session.exec(select(Api_provider))
-        for p in all_providers:
+        all_parrots = db_session.exec(select(Parrot))
+        for p in all_parrots:
             score = p.score()
             if score <= 0:
                 continue
             scores[p.id] = score
-        # choose some providers at random
+        # choose some parrots at random
         jobs = list()
         thechosen = list()
         connector = aiohttp.TCPConnector(limit=10)  # limit total number of simultaneous connections
@@ -335,7 +336,7 @@ async def main():
             logger.info(f"{options.minimum_match + 1} requests:")
             while True:
                 p_id = weighted_random(scores)
-                statement = select(Api_provider).where(Api_provider.id == p_id)
+                statement = select(Parrot).where(Parrot.id == p_id)
                 p = db_session.exec(statement).one_or_none()
                 assert p is not None
                 del scores[p_id]  # ensure we don't choose this one again
@@ -344,7 +345,7 @@ async def main():
                 await asyncio.sleep(0.0001)
                 if len(jobs) >= options.minimum_match + 1:
                     break
-                assert len(scores) > 0, "not enough providers for options.minimum_match"
+                assert len(scores) > 0, "not enough parrots for options.minimum_match"
             responses = await asyncio.gather(*jobs)
             assert len(thechosen) == len(responses)
             assert len(thechosen) == options.minimum_match + 1
@@ -382,8 +383,8 @@ if __name__ == "__main__":
     warnings.filterwarnings(  # https://github.com/tiangolo/sqlmodel/issues/189#issuecomment-1018014753
         "ignore", ".*Class SelectOfScalar will not make use of SQL compilation caching.*"
     )
-    db_file = os.path.join(os.getenv('HOME'), '.origin-ip.sqlite')
+    db_file = os.path.join(os.getenv('HOME'), '.myorigin.sqlite')
     engine = create_engine(f'sqlite:///{db_file}', echo=False)
     SQLModel.metadata.create_all(engine)
-    Api_provider.startup()
+    Parrot.startup()
     results = asyncio.run(main())
