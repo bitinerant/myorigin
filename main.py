@@ -45,6 +45,11 @@ parser.add_argument(
     help="maximum number of failed requests allowed (default: 10)",
 )
 parser.add_argument(
+    "--show-api-providers",
+    action='store_true',
+    help="display the database of IP address API providers in a human-readable form and exit",
+)
+parser.add_argument(
     "-l",
     "--logfile",
     type=str,
@@ -149,9 +154,6 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
 
     @staticmethod
     def startup():
-        # with Session(engine) as session:
-        #     parrot_count = session.query(Parrot).count()
-        # if parrot_count == 0:  # empty database
         with Session(engine) as session:
             for line in parrot_data.split('\n'):
                 wout_comments = re.sub(
@@ -191,30 +193,46 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
         assert ValueError, f"Ptask {Ptask(self.ptask).name} not yet implemented"
 
     def score(self):  # compute a score which will determine how likely it is to be chosen
-        logger.debug(f"{self.url()}:")
         if self.attempt_count != 0:
             percent = round(100.0 * self.success_count / self.attempt_count)
-            logger.debug(
-                f"    {percent}% success rate ({self.success_count} of {self.attempt_count})"
-            )
         else:
             percent = 100
-            logger.debug(f"    not yet attempted")
         if self.success_count != 0:
             average_ms = round(1.0 * self.total_rtt / self.success_count)
-            logger.debug(f"    {average_ms} ms average round trip time")
         else:
             average_ms = args.timeout
-        if len(self.last_errmsg) > 0:
-            logger.debug(f"    most recent error: {self.last_errmsg}")
         score = percent  # biggest portion of score is success rate
         score += 5  # every parrot gets a small chance of being selected
         if self.attempt_count < 10:
             score += 5  # prefer new parrots
         score += round((args.timeout - average_ms) / 200)  # prefer faster parrots
         score *= self.milliweight  # normally 1000, but can be 0 to disable or more to promote
-        logger.debug(f"    score: {score:,} points")
         return score
+
+    @staticmethod
+    def show_parrot_db():
+        with Session(engine) as session:
+            to_show = dict()
+            results = session.exec(select(Parrot))
+            for p in results:
+                score = p.score()
+                disp = ""
+                disp += f"{p.url()}:\n"
+                if p.attempt_count != 0:
+                    percent = round(100.0 * p.success_count / p.attempt_count)
+                    disp += f"    {percent}% success rate"
+                    disp += f" ({p.success_count} of {p.attempt_count})\n"
+                else:
+                    disp += f"    not yet attempted\n"
+                if p.success_count != 0:
+                    average_ms = round(1.0 * p.total_rtt / p.success_count)
+                    disp += f"    {average_ms} ms average round trip time\n"
+                if len(p.last_errmsg) > 0:
+                    disp += f"    most recent error: {p.last_errmsg[:70]}\n"
+                disp += f"    score: {round(score/1000):,} points\n"
+                to_show[score * 1000000 + p.id] = disp  # sortable, unique key
+            for p in dict(sorted(to_show.items(), reverse=True)):
+                print(to_show[p], end="")
 
 
 @dataclass
@@ -431,4 +449,7 @@ if __name__ == "__main__":
     engine = create_engine(f'sqlite:///{db_file}', echo=False)
     SQLModel.metadata.create_all(engine)
     Parrot.startup()
+    if args.show_api_providers:
+        Parrot.show_parrot_db()
+        exit()
     results = asyncio.run(main())
