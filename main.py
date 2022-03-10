@@ -194,18 +194,16 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
 
     def score(self):  # compute a score which will determine how likely it is to be chosen
         if self.attempt_count != 0:
-            percent = round(100.0 * self.success_count / self.attempt_count)
+            percent = 100.0 * self.success_count / self.attempt_count
         else:
-            percent = 100
-        if self.success_count != 0:
-            average_ms = round(1.0 * self.total_rtt / self.success_count)
-        else:
-            average_ms = args.timeout
-        score = percent  # biggest portion of score is success rate
+            percent = 100.0
+        score = round(percent**2 / 100.0)  # biggest portion of score is success rate
         score += 5  # every parrot gets a small chance of being selected
         if self.attempt_count < 10:
             score += 5  # prefer new parrots
-        score += round((args.timeout - average_ms) / 200)  # prefer faster parrots
+        if self.success_count != 0:
+            average_ms = 1.0 * self.total_rtt / self.success_count
+            score += round(max((5000 - average_ms) / 400, 0.0))  # prefer faster parrots
         score *= self.milliweight  # normally 1000, but can be 0 to disable or more to promote
         return score
 
