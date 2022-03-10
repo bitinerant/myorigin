@@ -2,11 +2,10 @@
 
 import asyncio
 from enum import Enum
-from sre_constants import SUCCESS
 import aiohttp
 from dataclasses import dataclass
 import logging
-from optparse import OptionParser  # https://docs.python.org/3/library/optparse.html
+import argparse  # https://docs.python.org/3/library/argparse.html
 import random
 import re
 import os
@@ -15,80 +14,84 @@ import warnings
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from grep_ips import GrepIPs
 
-parser = OptionParser(usage="usage: %prog [options]")
-parser.add_option(
+formatter_class = lambda prog: argparse.HelpFormatter(prog, max_help_position=33)
+parser = argparse.ArgumentParser(
+    description="Fast, fault-tolerant public IP address retrieval from Python or CLI.",
+    formatter_class=formatter_class,
+)
+parser.add_argument(
     "-t",
     "--timeout",
-    action="store",
-    type="int",
+    type=int,
     default=12000,
-    help="timeout for http and https requests, in milliseconds, default is 12000",
+    help="approximate timeout for http and https requests in milliseconds (default: 12000)",
 )
-parser.add_option(
-    "-m",
+parser.add_argument(
     "--minimum-match",
-    action="store",
-    type="int",
+    type=int,
     default=2,
-    help="minimum number of identical responses, default is 2",
+    help="an IP address is considered valid after this number of idential responses (default: 2)",
 )
-parser.add_option(
-    "-o",
+parser.add_argument(
     "--overkill",
-    action="store",
-    type="int",
+    type=int,
     default=0,
-    help="number of requests to make beyond minimum-match, default is 0",
+    help="number of initial requests to make beyond minimum-match (default: 0)",
 )
-parser.add_option(
-    "-g",
-    "--give-up-after",
-    action="store",
-    type="int",
+parser.add_argument(
+    "--max-failures",
+    type=int,
     default=10,
-    help="maximum number of failed requests allowed, default is 10",
+    help="maximum number of failed requests allowed (default: 10)",
 )
-parser.add_option(
+parser.add_argument(
     "-l",
     "--logfile",
-    action="store",
-    type="string",
+    type=str,
     default='-',
-    help="path for log file, default is '-' (write to terminal)",
+    help="path for log file (default: write to STDERR)",
 )
-parser.add_option(
+parser.add_argument(
     "-q",
     "--quiet",
-    action="store_const",
-    const=0,
+    action='append_const',
+    const=-1,
     dest="verbose",  # mapping:  "-q"->ERROR / ""->WARNING / "-v"->INFO / "-vv"->DEBUG
-    help="silence error messages",
+    help="silence warning messages",
 )
-parser.add_option(
+parser.add_argument(
     "-v",
     "--verbose",
-    action="count",
-    default=1,
+    action='append_const',
+    const=1,
     help="increase verbosity",
 )
-(options, args) = parser.parse_args()
-if len(args) != 0:
-    parser.error("incorrect number of arguments")
+args = parser.parse_args()
 logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
     datefmt='%H:%M:%S',
-    filename=options.logfile if options.logfile != '-' else None,
+    filename=args.logfile if args.logfile != '-' else None,
     filemode='a',
 )
 logger = logging.getLogger(__name__)
-log_levels = [logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG]
-logger.setLevel(log_levels[options.verbose])
+log_levels = [logging.CRITICAL, logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG]
+args.log_level = 2 + (0 if args.verbose is None else sum(args.verbose))
+try:
+    logger.setLevel(log_levels[args.log_level])
+except IndexError:
+    logger.setLevel(logging.WARNING)
+    logger.error(f"Invalid log level")
+    exit()
 
 
 def http_timeout():
     # ClientTimeout docs: https://docs.aiohttp.org/en/stable/client_reference.html#clienttimeout
-    give_up_after = float(options.timeout) / 1000
-    return aiohttp.ClientTimeout(sock_connect=give_up_after, sock_read=give_up_after)
+    give_up_after = float(args.timeout) / 1000
+    return aiohttp.ClientTimeout(
+        # total=give_up_after,  # don't use this because it includes the time in queue
+        sock_connect=give_up_after,
+        sock_read=give_up_after,
+    )
 
 
 async def timer_mark(session, context, params):
@@ -201,14 +204,14 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
             average_ms = round(1.0 * self.total_rtt / self.success_count)
             logger.debug(f"    {average_ms} ms average round trip time")
         else:
-            average_ms = options.timeout
+            average_ms = args.timeout
         if len(self.last_errmsg) > 0:
             logger.debug(f"    most recent error: {self.last_errmsg}")
         score = percent  # biggest portion of score is success rate
         score += 5  # every parrot gets a small chance of being selected
         if self.attempt_count < 10:
             score += 5  # prefer new parrots
-        score += round((options.timeout - average_ms) / 200)  # prefer faster parrots
+        score += round((args.timeout - average_ms) / 200)  # prefer faster parrots
         score *= self.milliweight  # normally 1000, but can be 0 to disable or more to promote
         logger.debug(f"    score: {score:,} points")
         return score
@@ -353,7 +356,7 @@ async def main():
         async with aiohttp.ClientSession(
             connector=connector, timeout=http_timeout(), trace_configs=[http_timer()]
         ) as aio_session:
-            logger.info(f"requests (need {options.minimum_match} matches):")
+            logger.info(f"requests (need {args.minimum_match} matches):")
             pending_jobs_count = 0
             ip_counts = dict()  # number of occurrences for each received IP
             fail_count = 0
@@ -363,22 +366,22 @@ async def main():
                 if len(ip_counts) > 1:
                     logger.error(f"multiple IPs received: {ip_counts}")
                     break
-                if max_ip_count >= options.minimum_match:  # we have sufficient results
+                if max_ip_count >= args.minimum_match:  # we have sufficient results
                     ip = max(ip_counts, key=ip_counts.get)
                     msg = f"IP found: {ip}"
                     logger.info(f"{msg} ({ip_counts[ip]} successes, {fail_count} failures)")
                     print(ip)
                     break
                 # spawn another get_ip() job if needed
-                wanted_count = options.minimum_match + options.overkill
+                wanted_count = args.minimum_match + args.overkill
                 jobs_count = max_ip_count + pending_jobs_count
-                if options.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
+                if args.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
                     msg = f"not enough parrots for {wanted_count} requests"
                     logger.warning(f"{msg}; ignoring '--overkill'")
-                    options.overkill = 0
-                if options.minimum_match + options.overkill > jobs_count:
+                    args.overkill = 0
+                if args.minimum_match + args.overkill > jobs_count:
                     if len(scores) == 0:
-                        logger.error(f"not enough parrots for {options.minimum_match} matches")
+                        logger.error(f"not enough parrots for {args.minimum_match} matches")
                         break
                     p_id = weighted_random(scores)
                     statement = select(Parrot).where(Parrot.id == p_id)
@@ -410,7 +413,7 @@ async def main():
                     pending_jobs_count -= 1
                     db_session.add(r.parrot)
                     db_session.commit()
-                    if fail_count >= options.give_up_after:
+                    if fail_count >= args.max_failures:
                         logger.error(f"{fail_count} requests failed; giving up")
                         break
                 except asyncio.QueueEmpty:
