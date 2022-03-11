@@ -5,6 +5,7 @@ from enum import Enum
 import aiohttp
 from dataclasses import dataclass
 import logging
+import platformdirs
 import argparse  # https://docs.python.org/3/library/argparse.html
 import random
 import re
@@ -439,11 +440,20 @@ async def main():
 
 
 if __name__ == "__main__":
+    appname = 'myorigin'
     GrepIPs.grep_ips_test()
     warnings.filterwarnings(  # https://github.com/tiangolo/sqlmodel/issues/189#issuecomment-1018014753
         "ignore", ".*Class SelectOfScalar will not make use of SQL compilation caching.*"
     )
-    db_file = os.path.join(os.getenv('HOME'), '.myorigin.sqlite')
+    config_dir = platformdirs.user_config_dir(appname)
+    try:
+        os.mkdir(config_dir)
+    except FileExistsError:
+        pass
+    except (PermissionError, FileNotFoundError):
+        logger.error(f"Unable to create directory `{config_dir}`. Exiting.")
+        exit()
+    db_file = os.path.join(config_dir, f'data.sqlite')
     engine = create_engine(f'sqlite:///{db_file}', echo=False)
     SQLModel.metadata.create_all(engine)
     Parrot.startup()
