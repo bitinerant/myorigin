@@ -6,7 +6,6 @@ import aiohttp
 from dataclasses import dataclass
 import logging
 import platformdirs
-import argparse  # https://docs.python.org/3/library/argparse.html
 import random
 import re
 import os
@@ -15,84 +14,108 @@ import warnings
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from grep_ips import GrepIPs
 
-formatter_class = lambda prog: argparse.HelpFormatter(prog, max_help_position=33)
-parser = argparse.ArgumentParser(
-    description="Fast, fault-tolerant public IP address retrieval from Python or CLI.",
-    formatter_class=formatter_class,
-)
-parser.add_argument(
-    "-t",
-    "--timeout",
-    type=int,
-    default=12000,
-    help="approximate timeout for http and https requests in milliseconds (default: 12000)",
-)
-parser.add_argument(
-    "--minimum-match",
-    type=int,
-    default=2,
-    help="an IP address is considered valid after this number of idential responses (default: 2)",
-)
-parser.add_argument(
-    "--overkill",
-    type=int,
-    default=0,
-    help="number of initial requests to make beyond minimum-match (default: 0)",
-)
-parser.add_argument(
-    "--max-failures",
-    type=int,
-    default=10,
-    help="maximum number of failed requests allowed (default: 10)",
-)
-parser.add_argument(
-    "--show-api-providers",
-    action='store_true',
-    help="display the database of IP address API providers in a human-readable form and exit",
-)
-parser.add_argument(
-    "-l",
-    "--logfile",
-    type=str,
-    default='-',
-    help="path for log file (default: write to STDERR)",
-)
-parser.add_argument(
-    "-q",
-    "--quiet",
-    action='append_const',
-    const=-1,
-    dest="verbose",  # mapping:  "-q"->ERROR / ""->WARNING / "-v"->INFO / "-vv"->DEBUG
-    help="silence warning messages",
-)
-parser.add_argument(
-    "-v",
-    "--verbose",
-    action='append_const',
-    const=1,
-    help="increase verbosity",
-)
-args = parser.parse_args()
-logging.basicConfig(
-    format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
-    datefmt='%H:%M:%S',
-    filename=args.logfile if args.logfile != '-' else None,
-    filemode='a',
-)
-logger = logging.getLogger(__name__)
-log_levels = [logging.CRITICAL, logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG]
-args.log_level = 2 + (0 if args.verbose is None else sum(args.verbose))
-try:
-    logger.setLevel(log_levels[args.log_level])
-except IndexError:
-    logger.setLevel(logging.WARNING)
-    logger.error(f"Invalid log level")
-    exit()
+
+def cli():
+    import argparse  # https://docs.python.org/3/library/argparse.html
+
+    formatter_class = lambda prog: argparse.HelpFormatter(prog, max_help_position=33)
+    parser = argparse.ArgumentParser(
+        description="Fast, fault-tolerant public IP address retrieval from Python or CLI.",
+        formatter_class=formatter_class,
+    )
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        type=int,
+        default=12000,
+        help="approximate timeout for http and https requests in milliseconds (default: 12000)",
+    )
+    parser.add_argument(
+        "--minimum-match",
+        type=int,
+        default=2,
+        help="an IP address is considered valid after this number of idential responses (default: 2)",
+    )
+    parser.add_argument(
+        "--overkill",
+        type=int,
+        default=0,
+        help="number of initial requests to make beyond minimum-match (default: 0)",
+    )
+    parser.add_argument(
+        "--max-failures",
+        type=int,
+        default=10,
+        help="maximum number of failed requests allowed (default: 10)",
+    )
+    parser.add_argument(
+        "--show-api-providers",
+        action='store_true',
+        help="display the database of IP address API providers in a human-readable form and exit",
+    )
+    parser.add_argument(
+        "-l",
+        "--logfile",
+        type=str,
+        default='-',
+        help="path for log file (default: write to STDERR)",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action='append_const',
+        const=-1,
+        dest="verbose",  # mapping:  "-q"->ERROR / ""->WARNING / "-v"->INFO / "-vv"->DEBUG
+        help="silence warning messages",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action='append_const',
+        const=1,
+        help="increase verbosity",
+    )
+    args = parser.parse_args()
+    if args.show_api_providers:
+        Parrot.show_parrot_db()
+        return
+    del args.show_api_providers
+    moa = myoriginArgs(**args.__dict__)
+    print(myorigin(moa))
 
 
-def http_timeout():
+@dataclass
+class myoriginArgs:
+    timeout: int = 12000
+    minimum_match: int = 2
+    overkill: int = 0
+    max_failures: int = 10
+    logfile: str = '-'
+    verbose: int = 0
+
+
+def myorigin(args: myoriginArgs) -> str:
+    logging.basicConfig(
+        format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
+        datefmt='%H:%M:%S',
+        filename=args.logfile if args.logfile != '-' else None,
+        filemode='a',
+    )
+    logger = logging.getLogger(__name__)
+    log_levels = [logging.CRITICAL, logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG]
+    args.log_level = 2 + (0 if args.verbose is None else sum(args.verbose))
+    try:
+        logger.setLevel(log_levels[args.log_level])
+    except IndexError:
+        logger.setLevel(logging.WARNING)
+        logger.error(f"Invalid log level")
+        return ""
+    return asyncio.run(main_loop(args, logger))
+
+
+def http_timeout(t):
     # ClientTimeout docs: https://docs.aiohttp.org/en/stable/client_reference.html#clienttimeout
-    give_up_after = float(args.timeout) / 1000
+    give_up_after = float(t) / 1000
     return aiohttp.ClientTimeout(
         # total=give_up_after,  # don't use this because it includes the time in queue
         sock_connect=give_up_after,
@@ -243,7 +266,7 @@ class FetchedIP:
 
 async def get_ip(p: Parrot, session, q: asyncio.Queue) -> None:
     url = p.url()
-    logger.debug(f"get_ip('{url}') begin")
+    # logger.debug(f"get_ip('{url}') begin")
     fip = FetchedIP(p)
     a = None
     try:
@@ -264,7 +287,7 @@ async def get_ip(p: Parrot, session, q: asyncio.Queue) -> None:
             a = "No IP address found"
         else:
             a = f"Found non-global IP address {ip}"
-    logger.debug(f"get_ip('{url}') end:  {a}")
+    # logger.debug(f"get_ip('{url}') end:  {a}")
     fip.ip = a
     await q.put(fip)
 
@@ -359,7 +382,8 @@ def weighted_random(options: dict):
     # #visually compare o and r
 
 
-async def main():
+async def main_loop(args: myoriginArgs, logger: logging.Logger) -> str:
+    result = ""
     with Session(engine) as db_session:
         scores = dict()
         all_parrots = db_session.exec(select(Parrot))
@@ -371,7 +395,7 @@ async def main():
         q = asyncio.Queue()  # great tutorial: https://realpython.com/async-io-python/
         connector = aiohttp.TCPConnector(limit=10)  # limit total number of simultaneous connections
         async with aiohttp.ClientSession(
-            connector=connector, timeout=http_timeout(), trace_configs=[http_timer()]
+            connector=connector, timeout=http_timeout(args.timeout), trace_configs=[http_timer()]
         ) as aio_session:
             logger.info(f"requests (need {args.minimum_match} matches):")
             pending_jobs_count = 0
@@ -387,7 +411,7 @@ async def main():
                     ip = max(ip_counts, key=ip_counts.get)
                     msg = f"IP found: {ip}"
                     logger.info(f"{msg} ({ip_counts[ip]} successes, {fail_count} failures)")
-                    print(ip)
+                    result = ip
                     break
                 # spawn another get_ip() job if needed
                 wanted_count = args.minimum_match + args.overkill
@@ -437,9 +461,14 @@ async def main():
                     pass
                 await asyncio.sleep(0.0001)
         connector.close()
+    return result
 
 
-if __name__ == "__main__":
+engine = None
+
+
+def on_import():
+    global engine
     appname = 'myorigin'
     GrepIPs.grep_ips_test()
     warnings.filterwarnings(  # https://github.com/tiangolo/sqlmodel/issues/189#issuecomment-1018014753
@@ -450,14 +479,15 @@ if __name__ == "__main__":
         os.mkdir(config_dir)
     except FileExistsError:
         pass
-    except (PermissionError, FileNotFoundError):
-        logger.error(f"Unable to create directory `{config_dir}`. Exiting.")
-        exit()
+    # except (PermissionError, FileNotFoundError):
+    #     one of these will be raised if the directory cannot be created
     db_file = os.path.join(config_dir, f'data.sqlite')
     engine = create_engine(f'sqlite:///{db_file}', echo=False)
     SQLModel.metadata.create_all(engine)
     Parrot.startup()
-    if args.show_api_providers:
-        Parrot.show_parrot_db()
-        exit()
-    results = asyncio.run(main())
+
+
+on_import()
+
+if __name__ == "__main__":
+    cli()
