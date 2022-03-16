@@ -6,7 +6,13 @@
 
 Fast, fault-tolerant public IP address retrieval from Python or CLI.
 
-## Command line usage
+### Installation
+
+```
+pip install myorigin
+```
+
+### Command line usage
 
 ```
 $ myorigin -v
@@ -16,6 +22,7 @@ $ myorigin -v
 08:54:34.573 INFO     http://ip.websupport.sk/ → 88.123.8.180 (814 ms; 34 of 34 succeeded)
 08:54:34.584 INFO IP found: 88.123.8.180 (2 successes, 1 failures)
 88.123.8.180
+$ 
 $ myorigin --help
 usage: myorigin [-h] [-t TIMEOUT] [--minimum-match MINIMUM_MATCH] [--overkill OVERKILL]
                 [--max-failures MAX_FAILURES] [--show-api-providers] [-l LOGFILE] [-q] [-v]
@@ -39,7 +46,7 @@ optional arguments:
 $ 
 ```
 
-## Library import usage
+### Library import usage
 
 ```
 >>> import myorigin
@@ -50,5 +57,5 @@ $
 >>> 
 ```
 
-*Did you find a mistake or have a suggestion? With just a GitHub account, it's easy to [suggest changes](https://github.com/bitinerant/myorigin/blob/main/README.md). ☺ *
+*Did you find a mistake or have a suggestion? With just a GitHub account, it's easy to [suggest changes](https://github.com/bitinerant/myorigin/blob/main/README.md).* ☺
 
