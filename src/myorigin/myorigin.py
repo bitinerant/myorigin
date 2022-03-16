@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import asyncio
 from enum import Enum
 import aiohttp
@@ -12,7 +10,7 @@ import os
 from typing import Optional
 import warnings
 from sqlmodel import Field, Session, SQLModel, create_engine, select
-from grep_ips import GrepIPs
+from grep_ips.grep_ips import GrepIPs
 
 
 def cli():
@@ -80,21 +78,23 @@ def cli():
         Parrot.show_parrot_db()
         return
     del args.show_api_providers
-    moa = myoriginArgs(**args.__dict__)
-    print(myorigin(moa))
+    args.log_level = 2 + (0 if args.verbose is None else sum(args.verbose))
+    del args.verbose
+    moa = MyoriginArgs(**args.__dict__)
+    print(my_ip(moa))
 
 
 @dataclass
-class myoriginArgs:
+class MyoriginArgs:
     timeout: int = 12000
     minimum_match: int = 2
     overkill: int = 0
     max_failures: int = 10
     logfile: str = '-'
-    verbose: int = 0
+    log_level: int = 0  # 0==disabled, 1==errors, 2==warnings, 3==info, 4==debug
 
 
-def myorigin(args: myoriginArgs) -> str:
+def my_ip(args: MyoriginArgs) -> str:
     logging.basicConfig(
         format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
         datefmt='%H:%M:%S',
@@ -103,7 +103,6 @@ def myorigin(args: myoriginArgs) -> str:
     )
     logger = logging.getLogger(__name__)
     log_levels = [logging.CRITICAL, logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG]
-    args.log_level = 2 + (0 if args.verbose is None else sum(args.verbose))
     try:
         logger.setLevel(log_levels[args.log_level])
     except IndexError:
@@ -382,7 +381,7 @@ def weighted_random(options: dict):
     # #visually compare o and r
 
 
-async def main_loop(args: myoriginArgs, logger: logging.Logger) -> str:
+async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     result = ""
     with Session(engine) as db_session:
         scores = dict()
