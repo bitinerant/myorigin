@@ -25,21 +25,24 @@ $ myorigin -v
 $ 
 $ myorigin --help
 usage: myorigin [-h] [-t TIMEOUT] [--minimum-match MINIMUM_MATCH] [--overkill OVERKILL]
-                [--max-failures MAX_FAILURES] [--show-api-providers] [-l LOGFILE] [-q] [-v]
+                [--max-failures MAX_FAILURES] [--show-api-providers] [-4] [-6]
+                [-l LOGFILE] [-q] [-v]
 
 Fast, fault-tolerant public IP address retrieval from Python or CLI.
 
 optional arguments:
   -h, --help                     show this help message and exit
-  -t TIMEOUT, --timeout TIMEOUT  approximate timeout for http and https requests in milliseconds
-                                 (default: 12000)
-  --minimum-match MINIMUM_MATCH  an IP address is considered valid after this number of idential
-                                 responses (default: 2)
-  --overkill OVERKILL            number of initial requests to make beyond minimum-match (default:
-                                 0)
+  -t TIMEOUT, --timeout TIMEOUT  approximate timeout for http and https requests in
+                                 milliseconds (default: 12000)
+  --minimum-match MINIMUM_MATCH  an IP address is considered valid after this number of
+                                 idential responses (default: 2)
+  --overkill OVERKILL            number of initial requests to make beyond minimum-match
+                                 (default: 0)
   --max-failures MAX_FAILURES    maximum number of failed requests allowed (default: 10)
-  --show-api-providers           display the database of IP address API providers in a human-
-                                 readable form and exit
+  --show-api-providers           display the database of IP address API providers in a
+                                 human-readable form and exit
+  -4, --ipv4                     use IPv4 only
+  -6, --ipv6                     use IPv6 only
   -l LOGFILE, --logfile LOGFILE  path for log file (default: write to STDERR)
   -q, --quiet                    silence warning messages
   -v, --verbose                  increase verbosity

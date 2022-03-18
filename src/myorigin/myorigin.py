@@ -7,6 +7,7 @@ import logging
 import platformdirs
 import random
 import re
+import socket
 import os
 from typing import Optional
 import warnings
@@ -53,6 +54,18 @@ def cli():
         help="display the database of IP address API providers in a human-readable form and exit",
     )
     parser.add_argument(
+        "-4",
+        "--ipv4",
+        action='store_true',
+        help="use IPv4 only",
+    )
+    parser.add_argument(
+        "-6",
+        "--ipv6",
+        action='store_true',
+        help="use IPv6 only",
+    )
+    parser.add_argument(
         "-l",
         "--logfile",
         type=str,
@@ -79,6 +92,12 @@ def cli():
         Parrot.show_parrot_db()
         return
     del args.show_api_providers
+    if args.ipv4:
+        args.ip_version = 4
+    if args.ipv6:
+        args.ip_version = 6
+    del args.ipv4
+    del args.ipv6
     args.log_level = 2 + (0 if args.verbose is None else sum(args.verbose))
     del args.verbose
     moa = MyoriginArgs(**args.__dict__)
@@ -91,6 +110,7 @@ class MyoriginArgs:
     minimum_match: int = 2
     overkill: int = 0
     max_failures: int = 10
+    ip_version: int = 0  # 0==either, 4=IPv4 only, 6=IPv6 only
     logfile: str = '-'
     log_level: int = 0  # 0==disabled, 1==errors, 2==warnings, 3==info, 4==debug
 
@@ -265,7 +285,7 @@ class FetchedIP:
     rtt: int = 0  # total milliseconds needed for request or 0 for error
 
 
-async def get_ip(p: Parrot, session, q: asyncio.Queue) -> None:
+async def get_ip(p: Parrot, session, q: asyncio.Queue, ip_version: int = 0) -> None:
     url = p.url()
     # logger.debug(f"get_ip('{url}') begin")
     fip = FetchedIP(p)
@@ -279,14 +299,24 @@ async def get_ip(p: Parrot, session, q: asyncio.Queue) -> None:
     if a is None and len(html) < 3:
         a = f"Only {len(html)} bytes received"
     if a is None:
-        ip = GrepIPs.grep_ips(html, global_ips_only=True, first_match_only=True)
+        ip = GrepIPs.grep_ips(
+            html,
+            global_ips_only=True,
+            first_match_only=True,
+            ip_version=ip_version,
+        )
         if ip is not None:
             a = str(ip)
             fip.ip_version = 4 if type(ip) == ipaddress.IPv4Address else 6
             fip.rtt = ms
     if a is None:
         # call grep_ips() again to be able to give a more specific error message
-        ip = GrepIPs.grep_ips(html, global_ips_only=False, first_match_only=True)
+        ip = GrepIPs.grep_ips(
+            html,
+            global_ips_only=False,
+            first_match_only=True,
+            ip_version=ip_version,
+        )
         if ip is None:
             a = "No IP address found"
         else:
@@ -401,7 +431,18 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                 continue
             scores[p.id] = score
         q = asyncio.Queue()  # great tutorial: https://realpython.com/async-io-python/
-        connector = aiohttp.TCPConnector(limit=10)  # limit total number of simultaneous connections
+        if args.ip_version == 0:
+            ip_family = 0
+        elif args.ip_version == 4:
+            ip_family = socket.AF_INET
+        elif args.ip_version == 6:
+            ip_family = socket.AF_INET6
+        else:
+            assert False
+        connector = aiohttp.TCPConnector(
+            limit=10,  # limit total number of simultaneous connections
+            family=ip_family,
+        )
         async with aiohttp.ClientSession(
             connector=connector, timeout=http_timeout(args.timeout), trace_configs=[http_timer()]
         ) as aio_session:
@@ -444,7 +485,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         assert p is not None
                         del scores[p_id]  # ensure we don't choose this one again
                         # FIXME: ¿delete other scores[] for the same service?
-                        asyncio.create_task(get_ip(p, aio_session, q))
+                        asyncio.create_task(get_ip(p, aio_session, q, ip_version=args.ip_version))
                         pending_jobs_count += 1
                     await asyncio.sleep(0.0001)
                     # process completed jobs
