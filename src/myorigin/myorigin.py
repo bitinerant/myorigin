@@ -2,6 +2,7 @@ import asyncio
 from enum import Enum
 import aiohttp
 from dataclasses import dataclass
+import ipaddress
 import logging
 import platformdirs
 import random
@@ -260,6 +261,7 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
 class FetchedIP:
     parrot: Parrot
     ip: str = ''  # IP address returned by server or error message
+    ip_version: int = 0  # 0==none, 4==IPv4, 6==IPv6
     rtt: int = 0  # total milliseconds needed for request or 0 for error
 
 
@@ -272,12 +274,15 @@ async def get_ip(p: Parrot, session, q: asyncio.Queue) -> None:
         html, ms = await http_get(url, session, max_size=16384)  # don't download it all
     except ValueError as e:
         a = str(e)
+        if a == '':
+            a = "Unknown http_get() error"
     if a is None and len(html) < 3:
         a = f"Only {len(html)} bytes received"
     if a is None:
         ip = GrepIPs.grep_ips(html, global_ips_only=True, first_match_only=True)
         if ip is not None:
             a = str(ip)
+            fip.ip_version = 4 if type(ip) == ipaddress.IPv4Address else 6
             fip.rtt = ms
     if a is None:
         # call grep_ips() again to be able to give a more specific error message
@@ -381,6 +386,10 @@ def weighted_random(options: dict):
     # #visually compare o and r
 
 
+class DoneWithJobs(Exception):
+    pass
+
+
 async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     result = ""
     with Session(engine) as db_session:
@@ -396,69 +405,78 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
         async with aiohttp.ClientSession(
             connector=connector, timeout=http_timeout(args.timeout), trace_configs=[http_timer()]
         ) as aio_session:
-            logger.info(f"requests (need {args.minimum_match} matches):")
-            pending_jobs_count = 0
-            ip_counts = dict()  # number of occurrences for each received IP
-            fail_count = 0
-            while True:  # spawn and collect jobs
-                max_ip_count = 0 if len(ip_counts) == 0 else max(ip_counts.values())
-                # FIXME: for multiple IPs, maybe ensure most_common >= second_most_common + minimum_match more
-                if len(ip_counts) > 1:
-                    logger.error(f"multiple IPs received: {ip_counts}")
-                    break
-                if max_ip_count >= args.minimum_match:  # we have sufficient results
-                    ip = max(ip_counts, key=ip_counts.get)
-                    msg = f"IP found: {ip}"
-                    logger.info(f"{msg} ({ip_counts[ip]} successes, {fail_count} failures)")
-                    result = ip
-                    break
-                # spawn another get_ip() job if needed
-                wanted_count = args.minimum_match + args.overkill
-                jobs_count = max_ip_count + pending_jobs_count
-                if args.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
-                    msg = f"not enough parrots for {wanted_count} requests"
-                    logger.warning(f"{msg}; ignoring '--overkill'")
-                    args.overkill = 0
-                if args.minimum_match + args.overkill > jobs_count:
-                    if len(scores) == 0:
-                        logger.error(f"not enough parrots for {args.minimum_match} matches")
-                        break
-                    p_id = weighted_random(scores)
-                    statement = select(Parrot).where(Parrot.id == p_id)
-                    p = db_session.exec(statement).one_or_none()
-                    assert p is not None
-                    del scores[p_id]  # ensure we don't choose this one again
-                    # FIXME: ¿delete other scores[] for the same service?
-                    asyncio.create_task(get_ip(p, aio_session, q))
-                    pending_jobs_count += 1
-                await asyncio.sleep(0.0001)
-                # process completed jobs
-                try:
-                    # r: FetchedIP = await q.get_nowait()
-                    r: FetchedIP = q.get_nowait()
-                    r.parrot.attempt_count += 1
-                    if r.rtt != 0:  # got valid IP
-                        ip_counts[r.ip] = ip_counts.get(r.ip, 0) + 1
-                        r.parrot.success_count += 1
-                        r.parrot.total_rtt += r.rtt
-                        portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
-                        logger.info(
-                            f"    {r.parrot.url()} → {r.ip} ({r.rtt} ms; {portion} succeeded)"
-                        )
-                    else:
-                        r.parrot.last_errmsg = r.ip
-                        portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
-                        logger.info(f"    {r.parrot.url()} → {r.ip[:40]} ({portion} succeeded)")
-                        fail_count += 1
-                    pending_jobs_count -= 1
-                    db_session.add(r.parrot)
-                    db_session.commit()
-                    if fail_count >= args.max_failures:
-                        logger.error(f"{fail_count} requests failed; giving up")
-                        break
-                except asyncio.QueueEmpty:
-                    pass
-                await asyncio.sleep(0.0001)
+            try:
+                logger.info(f"requests (need {args.minimum_match} matches):")
+                pending_jobs_count = 0
+                ip_counts = dict()
+                ip_counts[4] = dict()  # number of occurrences for each received IPv4
+                ip_counts[6] = dict()  # number of occurrences for each received IPv6
+                fail_count = 0
+                while True:  # spawn and collect jobs
+                    max_ipv0_count = 0  # max of IPv4 and IPv6
+                    for v in (4, 6):
+                        max_ip_count = 0 if len(ip_counts[v]) == 0 else max(ip_counts[v].values())
+                        # FIXME: for multiple IPs, maybe ensure most_common >= second_most_common + minimum_match more
+                        if len(ip_counts[v]) > 1:
+                            logger.error(f"multiple IPs received: {ip_counts[v]}")
+                            raise DoneWithJobs
+                        if max_ip_count >= args.minimum_match:  # we have sufficient results
+                            ip = max(ip_counts[v], key=ip_counts[v].get)
+                            msg = f"IP found: {ip} ({ip_counts[v][ip]} successes,"
+                            logger.info(f"{msg} {fail_count} failures)")
+                            result = ip
+                            raise DoneWithJobs
+                        max_ipv0_count = max(max_ipv0_count, max_ip_count)
+                    # spawn another get_ip() job if needed
+                    wanted_count = args.minimum_match + args.overkill
+                    jobs_count = max_ipv0_count + pending_jobs_count
+                    if args.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
+                        msg = f"not enough parrots for {wanted_count} requests"
+                        logger.warning(f"{msg}; ignoring '--overkill'")
+                        args.overkill = 0
+                    if args.minimum_match + args.overkill > jobs_count:
+                        if len(scores) == 0:
+                            logger.error(f"not enough parrots for {args.minimum_match} matches")
+                            raise DoneWithJobs
+                        p_id = weighted_random(scores)
+                        statement = select(Parrot).where(Parrot.id == p_id)
+                        p = db_session.exec(statement).one_or_none()
+                        assert p is not None
+                        del scores[p_id]  # ensure we don't choose this one again
+                        # FIXME: ¿delete other scores[] for the same service?
+                        asyncio.create_task(get_ip(p, aio_session, q))
+                        pending_jobs_count += 1
+                    await asyncio.sleep(0.0001)
+                    # process completed jobs
+                    try:
+                        r: FetchedIP = q.get_nowait()  # may raise QueueEmpty
+                        r.parrot.attempt_count += 1
+                        if r.rtt != 0:  # got valid IP of some sort
+                            if r.ip != '':
+                                v = r.ip_version
+                                ip_counts[v][r.ip] = ip_counts[v].get(r.ip, 0) + 1
+                            r.parrot.success_count += 1
+                            r.parrot.total_rtt += r.rtt
+                            portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
+                            msg = f"    {r.parrot.url()} → {r.ip} ({r.rtt} ms;"
+                            logger.info(f"{msg} {portion} succeeded)")
+                        else:
+                            r.parrot.last_errmsg = r.ip
+                            portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
+                            msg = f"    {r.parrot.url()} → {r.ip[:40]}"
+                            logger.info(f"{msg} ({portion} succeeded)")
+                            fail_count += 1
+                        pending_jobs_count -= 1
+                        db_session.add(r.parrot)
+                        db_session.commit()
+                        if fail_count >= args.max_failures:
+                            logger.error(f"{fail_count} requests failed; giving up")
+                            raise DoneWithJobs
+                    except asyncio.QueueEmpty:
+                        pass
+                    await asyncio.sleep(0.0001)
+            except DoneWithJobs:
+                pass
         connector.close()
     return result
 
