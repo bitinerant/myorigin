@@ -110,7 +110,7 @@ class MyoriginArgs:
     minimum_match: int = 2
     overkill: int = 0
     max_failures: int = 10
-    ip_version: int = 0  # 0==either, 4=IPv4 only, 6=IPv6 only
+    ip_version: int = 0  # 0==either, 4==IPv4 only, 6==IPv6 only
     logfile: str = '-'
     log_level: int = 0  # 0==disabled, 1==errors, 2==warnings, 3==info, 4==debug
 
@@ -159,7 +159,7 @@ def http_timer():  # configure signals to record beginning and end of http reque
     return trace_config
 
 
-async def http_get(url, session, max_size=-1):
+async def http_get(url: str, session: aiohttp.ClientSession, max_size=-1, ip_version=0):
     timer_marks = list()
     # change user agent string for better site compatibility
     # via: wget -O- -q http://httpbin.org/get |grep User-Agent
@@ -189,6 +189,7 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
     # (Parrots repeats what they hear. A my-IP API provider repeats the callers IP back to them.)
     id: int = Field(primary_key=True)
     ptask: str  # one of: 'I', 'J', 'D', 'S', 'M', 'N'
+    ip_version: int  # always 4 or 6
     address: str  # host+path (URL without protocol)
     milliweight: int = 1000  # 2000 means 2x more likely to be used; 0 means disabled
     attempt_count: int = 0  # number of attempted connections
@@ -200,33 +201,36 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
     def startup():
         with Session(engine) as session:
             for line in parrot_data.split('\n'):
-                wout_comments = re.sub(
-                    r'( +|^)#.*\n?', '', line
-                )  # strip comments and preceding spaces
+                wout_comments = re.sub(r'( +|^)#.*\n?', '', line)  # strip comments
                 if len(wout_comments) == 0:
                     continue
                 fields = re.sub(r' +', ' ', wout_comments).split(' ')
-                assert len(fields) >= 2, f"invalid parrot_data line: {line}"
+                assert len(fields) >= 3, f"invalid parrot_data line: {line}"
                 # do not adjust the Ptask list here except to append; .id is computed from it
                 for i, ptask in enumerate([Ptask.IP_HTTP, Ptask.IP_HTTPS]):
-                    # uniquely id each row so we can safely copy future changes
-                    id = 2018264000 + int(fields[0]) * 10 + i
                     address = fields[1]
-                    statement = select(Parrot).where(Parrot.id == id)
-                    result = session.exec(statement).one_or_none()
-                    if result is None:  # no existing row in DB
-                        if ptask.value not in fields[2:]:  # Ptask inactive
-                            continue
-                        result = Parrot()  # add new row to database for this Ptask
-                        result.id = id
-                    else:  # existing row in DB
-                        if ptask.value not in fields[2:]:  # Ptask inactive
-                            result.milliweight = 0  # disable Ptask in DB
-                        else:
-                            result.milliweight = 1000
-                    result.ptask = ptask.value
-                    result.address = address
-                    session.add(result)
+                    ip_version = int(fields[2])
+                    for v in (4, 6):  # IPv4, IPv6
+                        ip_version_offset = 0 if v == 4 else 50  # IPv4 uses 0-49, IPv6 uses 50-99
+                        id = 2018260000 + int(fields[0]) * 100 + ip_version_offset + i
+                        statement = select(Parrot).where(Parrot.id == id)
+                        result = session.exec(statement).one_or_none()
+                        ptask_active = ptask.value in fields[3:]
+                        ip_version_active = ip_version == 0 or ip_version == v
+                        if result is None:  # no existing row in DB
+                            if not (ptask_active and ip_version_active):
+                                continue  # not in DB and shouldn't be
+                            result = Parrot()  # add new row to database for this Ptask
+                            result.id = id
+                        else:  # existing row in DB
+                            if not (ptask_active and ip_version_active):
+                                result.milliweight = 0  # disable in DB
+                            else:
+                                result.milliweight = 1000  # make sure it is enabled
+                        result.ptask = ptask.value
+                        result.ip_version = v
+                        result.address = address
+                        session.add(result)
             session.commit()
 
     def url(self):
@@ -259,7 +263,7 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
             for p in results:
                 score = p.score()
                 disp = ""
-                disp += f"{p.url()}:\n"
+                disp += f"ipv{p.ip_version}.{p.url()}:\n"
                 if p.attempt_count != 0:
                     percent = round(100.0 * p.success_count / p.attempt_count)
                     disp += f"    {percent}% success rate"
@@ -285,13 +289,17 @@ class FetchedIP:
     rtt: int = 0  # total milliseconds needed for request or 0 for error
 
 
-async def get_ip(p: Parrot, session, q: asyncio.Queue, ip_version: int = 0) -> None:
-    url = p.url()
-    # logger.debug(f"get_ip('{url}') begin")
+async def get_ip(
+    p: Parrot, session: aiohttp.ClientSession, q: asyncio.Queue, ip_version: int = 0
+) -> None:
     fip = FetchedIP(p)
     a = None
     try:
-        html, ms = await http_get(url, session, max_size=16384)  # don't download it all
+        html, ms = await http_get(
+            p.url(),
+            session,
+            max_size=16384,  # don't download it all
+        )
     except ValueError as e:
         a = str(e)
         if a == '':
@@ -321,7 +329,6 @@ async def get_ip(p: Parrot, session, q: asyncio.Queue, ip_version: int = 0) -> N
             a = "No IP address found"
         else:
             a = f"Found non-global IP address {ip}"
-    # logger.debug(f"get_ip('{url}') end:  {a}")
     fip.ip = a
     await q.put(fip)
 
@@ -336,67 +343,71 @@ class Ptask(Enum):
 
 
 parrot_data = '''
-# **Do not change or reuse IDs** (first column) because they are used to revise rows in
-# existing databases.
-#
-# fields: ID address Ptasks
+# **Do not change or reuse IDs** (fields[0])
 
-00 icanhazip.com/                              I J
-01 ip1.dynupdate.no-ip.com/                    I
-02 myip.dnsomatic.com/                         I J
-03 smart-ip.net/myip                                       # cannot connect
-04 ipecho.net/plain                              J
-05 ident.me/                                   I J M N     # https://api.ident.me/
-06 tnedi.me/                                   I J M N     # https://ipa.tnedi.me/
-07 ip.appspot.com/                             I J
-08 checkip.dyndns.org/                         I
-09 www.lawrencegoetz.com/programs/ipinfo/                  # no API
-10 shtuff.it/myip/short/                                   # cannot connect
-11 ifconfig.me/ip                              I J
-12 www.google.com/search?q=my+ip                           # 403 Forbidden
-13 bot.whatismyipaddress.com/                              # API discontinued "due to massive abuse"
-14 ipv4.ipogre.com/                                        # Connection timeout
-15 automation.whatismyip.com/n09230945.asp                 # API discontinued?
-16 myipis.net/                                             # API discontinued?
-17 www.ipchicken.com/                            J
-18 myip.com.tw/                                  J
-19 httpbin.org/ip                              I J
-20 ip.nf/me.txt                                  J   N
-21 am.i.mullvad.net/ip                           J
-22 am.i.mullvad.net/json                             N     # https://mullvad.net/en/check/
-23 zx2c4.com/ip                                I J
-24 ip.websupport.sk/                           I J
-25 www.ivpn.net/                                 J
-26 www.ipaddress.com/                                      # API discontinued?
-27 www.ipaddress.my/                             J
-28 www.showmyip.com/                                       # no API
-29 ip-api.com/line/?fields=query               I
-30 ip-api.com/json/?fields=16966359                M       # https://ip-api.com/docs/
-31 api.ipify.org/                              I J
-32 ifconfig.io/ip                              I J
-33 ipaddress.sh/                               I J
-34 api.iplocation.net/?ip={ip}                       N     # https://api.iplocation.net/
-35 ipinfo.io/ip                                I J
-36 ipinfo.io/{ip}/json                               N
-37 api.ipregistry.co/?key=tryout               I J   N     # https://ipregistry.co/docs/
-38 myexternalip.com/raw                        I J
-39 checkip.amazonaws.com/                      I J
-40 diagnostic.opendns.com/myip                             # cannot connect
-41 whatismyip.akamai.com/                                  # cannot connect
-42 test-ipv6.com/ip/                           I J         # works for IPv4 too
-43 api.infoip.io/                              I J M N     # https://ciokan.docs.apiary.io/
-44 checkip.dns.he.net/                         I J
-45 ipapi.co/ip                                   J
-46 www.cloudflare.com/cdn-cgi/trace            I J
-47 www.trackip.net/ip                          I J
-48 www.trackip.net/ip?json                         M N
-49 mypubip.com/                                I J
-50 ip.seeip.org/                                 J
-51 ip.seeip.org/geoip                              M N
-52 api.bigdatacloud.net/data/client-ip         I J
-53 myip.opendns.com%20A%20@resolver1.opendns.com       D  
-54 o-o.myaddr.l.google.com%20TXT%20@8.8.8.8            D  
-55 whoami.akamai.net%20ANY%20@ns1-1.akamaitech.net     D  
+# fields[0] → parrot number (always unique so we can safely copy future changes to user's DB)
+# fields[1] → parrot address (URL without 'https://' or 'http://')
+# fields[2] → ip version (0==both, 4==IPv4 only, 6==IPv6 only)
+# fields[3:] → Ptask list
+
+# currently, each row can expand to 4 database rows (2 IP versions × http vs. https)
+
+00 icanhazip.com/                            0 I J
+01 ip1.dynupdate.no-ip.com/                  0 I
+02 myip.dnsomatic.com/                       0 I J
+03 smart-ip.net/myip                         0             # cannot connect
+04 ipecho.net/plain                          0   J
+05 ident.me/                                 0 I J M N     # https://api.ident.me/
+06 tnedi.me/                                 0 I J M N     # https://ipa.tnedi.me/
+07 ip.appspot.com/                           0 I J
+08 checkip.dyndns.org/                       0 I
+09 www.lawrencegoetz.com/programs/ipinfo/    0             # no API
+10 shtuff.it/myip/short/                     0             # cannot connect
+11 ifconfig.me/ip                            0 I J
+12 www.google.com/search?q=my+ip             0             # 403 Forbidden
+13 bot.whatismyipaddress.com/                0             # API discontinued "due to massive abuse"
+14 ipv4.ipogre.com/                          0             # Connection timeout
+15 automation.whatismyip.com/n09230945.asp   0             # API discontinued?
+16 myipis.net/                               0             # API discontinued?
+17 www.ipchicken.com/                        0   J
+18 myip.com.tw/                              0   J
+19 httpbin.org/ip                            0 I J
+20 ip.nf/me.txt                              0   J   N
+21 am.i.mullvad.net/ip                       0   J
+22 am.i.mullvad.net/json                     0       N     # https://mullvad.net/en/check/
+23 zx2c4.com/ip                              0 I J
+24 ip.websupport.sk/                         0 I J
+25 www.ivpn.net/                             0   J
+26 www.ipaddress.com/                        0             # API discontinued?
+27 www.ipaddress.my/                         0   J
+28 www.showmyip.com/                         0             # no API
+29 ip-api.com/line/?fields=query             0 I
+30 ip-api.com/json/?fields=16966359          0     M       # https://ip-api.com/docs/
+31 api.ipify.org/                            0 I J
+32 ifconfig.io/ip                            0 I J
+33 ipaddress.sh/                             0 I J
+34 api.iplocation.net/?ip={ip}               0       N     # https://api.iplocation.net/
+35 ipinfo.io/ip                              0 I J
+36 ipinfo.io/{ip}/json                       0       N
+37 api.ipregistry.co/?key=tryout             0 I J   N     # https://ipregistry.co/docs/
+38 myexternalip.com/raw                      0 I J
+39 checkip.amazonaws.com/                    0 I J
+40 diagnostic.opendns.com/myip               0             # cannot connect
+41 whatismyip.akamai.com/                    0             # cannot connect
+42 test-ipv6.com/ip/                         0 I J         # works for IPv4 too
+43 api.infoip.io/                            0 I J M N     # https://ciokan.docs.apiary.io/
+44 checkip.dns.he.net/                       0 I J
+45 ipapi.co/ip                               0   J
+46 www.cloudflare.com/cdn-cgi/trace          0 I J
+47 www.trackip.net/ip                        0 I J
+48 www.trackip.net/ip?json                   0     M N
+49 mypubip.com/                              0 I J
+50 ip.seeip.org/                             0   J
+51 ip.seeip.org/geoip                        0     M N
+52 api.bigdatacloud.net/data/client-ip       0 I J
+53 myip.opendns.com%20A%20@resolver1.opendns.com   0   D  
+54 o-o.myaddr.l.google.com%20TXT%20@8.8.8.8        0   D  
+55 whoami.akamai.net%20ANY%20@ns1-1.akamaitech.net 0   D  
 '''
 
 
@@ -424,7 +435,11 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     result = ""
     with Session(engine) as db_session:
         scores = dict()
-        all_parrots = db_session.exec(select(Parrot))
+        if args.ip_version == 0:
+            statement = select(Parrot)
+        else:  # if user wants IPv4 only, ignore IPv6 DB rows; vice-versa
+            statement = select(Parrot).where(Parrot.ip_version == args.ip_version)
+        all_parrots = db_session.exec(statement)
         for p in all_parrots:
             score = p.score()
             if score <= 0:
@@ -439,7 +454,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
             ip_family = socket.AF_INET6
         else:
             assert False
-        connector = aiohttp.TCPConnector(
+        connector = aiohttp.TCPConnector(  # https://docs.aiohttp.org/en/stable/client_reference.html#tcpconnector
             limit=10,  # limit total number of simultaneous connections
             family=ip_family,
         )
@@ -471,11 +486,16 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                     # spawn another get_ip() job if needed
                     wanted_count = args.minimum_match + args.overkill
                     jobs_count = max_ipv0_count + pending_jobs_count
+                    logger.debug(
+                        f"have {max_ipv0_count} IPs plus {pending_jobs_count} pending,"
+                        + f" want {wanted_count}, need {args.minimum_match}"
+                    )
                     if args.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
                         msg = f"not enough parrots for {wanted_count} requests"
                         logger.warning(f"{msg}; ignoring '--overkill'")
                         args.overkill = 0
-                    if args.minimum_match + args.overkill > jobs_count:
+                        wanted_count = args.minimum_match + args.overkill
+                    if wanted_count > jobs_count:
                         if len(scores) == 0:
                             logger.error(f"not enough parrots for {args.minimum_match} matches")
                             raise DoneWithJobs
@@ -485,6 +505,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         assert p is not None
                         del scores[p_id]  # ensure we don't choose this one again
                         # FIXME: ¿delete other scores[] for the same service?
+                        logger.debug(f"launching task IPv{p.ip_version} {p.url()}")
                         asyncio.create_task(get_ip(p, aio_session, q, ip_version=args.ip_version))
                         pending_jobs_count += 1
                     await asyncio.sleep(0.0001)
@@ -514,7 +535,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                             logger.error(f"{fail_count} requests failed; giving up")
                             raise DoneWithJobs
                     except asyncio.QueueEmpty:
-                        pass
+                        await asyncio.sleep(0.005)  # reduce looping when waiting on responses
                     await asyncio.sleep(0.0001)
             except DoneWithJobs:
                 pass
