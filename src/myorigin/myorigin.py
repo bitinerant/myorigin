@@ -503,8 +503,12 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         statement = select(Parrot).where(Parrot.id == p_id)
                         p = db_session.exec(statement).one_or_none()
                         assert p is not None
-                        del scores[p_id]  # ensure we don't choose this one again
-                        # FIXME: ¿delete other scores[] for the same service?
+                        a = p_id - (p_id % 100)  # 100 IDs per parrot_data line
+                        b = a + 100  # top of range for a sinle parrot_data line
+                        ids_to_del = [k for k in scores.keys() if a <= k < b]
+                        logger.debug(f"chose {p_id}, removing {ids_to_del}")
+                        for k in ids_to_del:  # eliminate all IDs from same parrot_data line, e.g.
+                            del scores[k]  # don't check both http://ident.me and https://ident.me
                         logger.debug(f"launching task IPv{p.ip_version} {p.url()}")
                         asyncio.create_task(get_ip(p, aio_session, q, ip_version=args.ip_version))
                         pending_jobs_count += 1
