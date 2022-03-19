@@ -18,7 +18,7 @@ from grep_ips.grep_ips import GrepIPs
 def cli():
     import argparse  # https://docs.python.org/3/library/argparse.html
 
-    formatter_class = lambda prog: argparse.HelpFormatter(prog, max_help_position=33)
+    formatter_class = lambda prog: argparse.HelpFormatter(prog, max_help_position=37)
     parser = argparse.ArgumentParser(
         description="Fast, fault-tolerant public IP address retrieval from Python or CLI.",
         formatter_class=formatter_class,
@@ -47,6 +47,12 @@ def cli():
         type=int,
         default=10,
         help="maximum number of failed requests allowed (default: 10)",
+    )
+    parser.add_argument(
+        "--max-connections",
+        type=int,
+        default=10,
+        help="maximum number of simultaneous network connections allowed (default: 10)",
     )
     parser.add_argument(
         "--show-api-providers",
@@ -110,6 +116,7 @@ class MyoriginArgs:
     minimum_match: int = 2
     overkill: int = 0
     max_failures: int = 10
+    max_connections: int = 10
     ip_version: int = 0  # 0==either, 4==IPv4 only, 6==IPv6 only
     logfile: str = '-'
     log_level: int = 0  # 0==disabled, 1==errors, 2==warnings, 3==info, 4==debug
@@ -455,7 +462,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
         else:
             assert False
         connector = aiohttp.TCPConnector(  # https://docs.aiohttp.org/en/stable/client_reference.html#tcpconnector
-            limit=10,  # limit total number of simultaneous connections
+            limit=args.max_connections,
             family=ip_family,
         )
         async with aiohttp.ClientSession(
@@ -495,7 +502,9 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         logger.warning(f"{msg}; ignoring '--overkill'")
                         args.overkill = 0
                         wanted_count = args.minimum_match + args.overkill
-                    if wanted_count > jobs_count:
+                    if wanted_count > jobs_count and pending_jobs_count < args.max_connections:
+                        # TCPConnector(limit=...) does this too, but checking args.max_connections
+                        # ... here delays "not enough parrots" so we can collect more responses
                         if len(scores) == 0:
                             logger.error(f"not enough parrots for {args.minimum_match} matches")
                             raise DoneWithJobs
