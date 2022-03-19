@@ -360,26 +360,26 @@ parrot_data = '''
 # currently, each row can expand to 4 database rows (2 IP versions × http vs. https)
 
 00 icanhazip.com/                            0 I J
-01 ip1.dynupdate.no-ip.com/                  0 I
-02 myip.dnsomatic.com/                       0 I J
+01 ip1.dynupdate.no-ip.com/                  4 I
+02 myip.dnsomatic.com/                       4 I J
 03 smart-ip.net/myip                         0             # cannot connect
-04 ipecho.net/plain                          0   J
+04 ipecho.net/plain                          4   J
 05 ident.me/                                 0 I J M N     # https://api.ident.me/
 06 tnedi.me/                                 0 I J M N     # https://ipa.tnedi.me/
-07 ip.appspot.com/                           0 I J
-08 checkip.dyndns.org/                       0 I
+07 ip.appspot.com/                           0             # 503 Service Unavailable
+08 checkip.dyndns.org/                       4 I
 09 www.lawrencegoetz.com/programs/ipinfo/    0             # no API
 10 shtuff.it/myip/short/                     0             # cannot connect
-11 ifconfig.me/ip                            0 I J
+11 ifconfig.me/ip                            4 I J
 12 www.google.com/search?q=my+ip             0             # 403 Forbidden
 13 bot.whatismyipaddress.com/                0             # API discontinued "due to massive abuse"
 14 ipv4.ipogre.com/                          0             # Connection timeout
 15 automation.whatismyip.com/n09230945.asp   0             # API discontinued?
 16 myipis.net/                               0             # API discontinued?
-17 www.ipchicken.com/                        0   J
-18 myip.com.tw/                              0   J
-19 httpbin.org/ip                            0 I J
-20 ip.nf/me.txt                              0   J   N
+17 www.ipchicken.com/                        4   J
+18 myip.com.tw/                              4   J
+19 httpbin.org/ip                            4 I J
+20 ip.nf/me.txt                              4   J   N
 21 am.i.mullvad.net/ip                       0   J
 22 am.i.mullvad.net/json                     0       N     # https://mullvad.net/en/check/
 23 zx2c4.com/ip                              0 I J
@@ -388,21 +388,21 @@ parrot_data = '''
 26 www.ipaddress.com/                        0             # API discontinued?
 27 www.ipaddress.my/                         0   J
 28 www.showmyip.com/                         0             # no API
-29 ip-api.com/line/?fields=query             0 I
+29 ip-api.com/line/?fields=query             4 I
 30 ip-api.com/json/?fields=16966359          0     M       # https://ip-api.com/docs/
-31 api.ipify.org/                            0 I J
+31 api.ipify.org/                            4 I J
 32 ifconfig.io/ip                            0 I J
-33 ipaddress.sh/                             0 I J
+33 ipaddress.sh/                             4 I J
 34 api.iplocation.net/?ip={ip}               0       N     # https://api.iplocation.net/
-35 ipinfo.io/ip                              0 I J
-36 ipinfo.io/{ip}/json                       0       N
+35 ipinfo.io/ip                              4 I J
+36 ipinfo.io/{ip}/json                       4       N
 37 api.ipregistry.co/?key=tryout             0 I J   N     # https://ipregistry.co/docs/
-38 myexternalip.com/raw                      0 I J
-39 checkip.amazonaws.com/                    0 I J
+38 myexternalip.com/raw                      4 I J
+39 checkip.amazonaws.com/                    4 I J
 40 diagnostic.opendns.com/myip               0             # cannot connect
 41 whatismyip.akamai.com/                    0             # cannot connect
-42 test-ipv6.com/ip/                         0 I J         # works for IPv4 too
-43 api.infoip.io/                            0 I J M N     # https://ciokan.docs.apiary.io/
+42 test-ipv6.com/ip/                         4 I J         # ironically, no IPv6 AAAA record
+43 api.infoip.io/                            4 I J M N     # https://ciokan.docs.apiary.io/
 44 checkip.dns.he.net/                       0 I J
 45 ipapi.co/ip                               0   J
 46 www.cloudflare.com/cdn-cgi/trace          0 I J
@@ -411,7 +411,7 @@ parrot_data = '''
 49 mypubip.com/                              0 I J
 50 ip.seeip.org/                             0   J
 51 ip.seeip.org/geoip                        0     M N
-52 api.bigdatacloud.net/data/client-ip       0 I J
+52 api.bigdatacloud.net/data/client-ip       4 I J
 53 myip.opendns.com%20A%20@resolver1.opendns.com   0   D  
 54 o-o.myaddr.l.google.com%20TXT%20@8.8.8.8        0   D  
 55 whoami.akamai.net%20ANY%20@ns1-1.akamaitech.net 0   D  
