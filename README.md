@@ -47,7 +47,13 @@ optional arguments:
   --show-api-providers               display the database of IP address API
                                      providers in a human-readable form and
                                      exit
-  -4, --ipv4                         use IPv4 only
+  -4, --ipv4                         use IPv4 only; note this or --ipv6 is
+                                     highly recommended if both IPv4 and IPv6
+                                     are available, in order to avoid wasteful
+                                     network traffic and unpredictable results
+                                     (sometimes --minimum-match IPv4 addresses
+                                     will be received first, and sometimes
+                                     IPv6 will win)
   -6, --ipv6                         use IPv6 only
   -l LOGFILE, --logfile LOGFILE      path for log file (default: write to
                                      STDERR)
