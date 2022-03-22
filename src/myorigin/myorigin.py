@@ -129,11 +129,20 @@ class MyoriginArgs:
     ip_version: int = 0  # 0==either, 4==IPv4 only, 6==IPv6 only
     logfile: str = '-'
     log_level: int = 0  # 0==disabled, 1==errors, 2==warnings, 3==info, 4==debug
+    exception_level = 0  # 0==disabled, 1==raise exception for errors, 2==... for warnings, etc.
+
+
+class NetworkError(Exception):
+    pass
 
 
 def my_ip(args: MyoriginArgs) -> str:
+    if args.log_level >= 3:  # info or debug
+        log_format = '%(asctime)s.%(msecs)03d %(levelname)s %(message)s'
+    else:
+        log_format = '%(message)s'
     logging.basicConfig(
-        format='%(asctime)s.%(msecs)03d %(levelname)s %(message)s',
+        format=log_format,
         datefmt='%H:%M:%S',
         filename=args.logfile if args.logfile != '-' else None,
         filemode='a',
@@ -144,7 +153,10 @@ def my_ip(args: MyoriginArgs) -> str:
         logger.setLevel(log_levels[args.log_level])
     except IndexError:
         logger.setLevel(logging.WARNING)
-        logger.error(f"Invalid log level")
+        error = "Invalid log level"
+        logger.error(error)
+        if args.exception_level >= 1:
+            raise ValueError(error)
         return ""
     return asyncio.run(main_loop(args, logger))
 
@@ -449,6 +461,7 @@ class DoneWithJobs(Exception):
 
 async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     result = ""
+    error = None
     with Session(engine) as db_session:
         scores = dict()
         if args.ip_version == 0:
@@ -490,7 +503,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         max_ip_count = 0 if len(ip_counts[v]) == 0 else max(ip_counts[v].values())
                         # FIXME: for multiple IPs, maybe ensure most_common >= second_most_common + minimum_match more
                         if len(ip_counts[v]) > 1:
-                            logger.error(f"multiple IPs received: {ip_counts[v]}")
+                            error = f"multiple IPs received: {ip_counts[v]}"
                             raise DoneWithJobs
                         if max_ip_count >= args.minimum_match:  # we have sufficient results
                             ip = max(ip_counts[v], key=ip_counts[v].get)
@@ -515,7 +528,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         # TCPConnector(limit=...) does this too, but checking args.max_connections
                         # ... here delays "not enough parrots" so we can collect more responses
                         if len(scores) == 0:
-                            logger.error(f"not enough parrots for {args.minimum_match} matches")
+                            error = f"not enough parrots for {args.minimum_match} matches"
                             raise DoneWithJobs
                         p_id = weighted_random(scores)
                         statement = select(Parrot).where(Parrot.id == p_id)
@@ -554,7 +567,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         db_session.add(r.parrot)
                         db_session.commit()
                         if fail_count >= args.max_failures:
-                            logger.error(f"{fail_count} requests failed; giving up")
+                            error = f"{fail_count} requests failed; giving up"
                             raise DoneWithJobs
                     except asyncio.QueueEmpty:
                         await asyncio.sleep(0.005)  # reduce looping when waiting on responses
@@ -562,6 +575,10 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
             except DoneWithJobs:
                 pass
         connector.close()
+    if error is not None:
+        logger.error(error)
+        if args.exception_level >= 1:
+            raise NetworkError(error)
     return result
 
 

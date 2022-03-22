@@ -40,6 +40,15 @@ $ myorigin --help
 >>> myorigin.my_ip(args)
 '88.123.8.180'
 >>> 
+>>> args.exception_level = 2
+>>> args.ip_version = 6  # but there is no IPv6 on this LAN
+>>> try:
+...     myorigin.my_ip(args)
+... except myorigin.NetworkError as e:
+...     print(f"got error: {e}")
+... 
+got error: 10 requests failed; giving up
+>>> 
 ```
 
 ### Similiar projects

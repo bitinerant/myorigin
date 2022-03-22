@@ -1,1 +1,1 @@
-from .myorigin import my_ip, MyoriginArgs
+from .myorigin import my_ip, MyoriginArgs, NetworkError
