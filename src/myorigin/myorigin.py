@@ -8,6 +8,7 @@ import platformdirs
 import random
 import re
 import socket
+import sys
 import os
 from typing import Optional
 import warnings
@@ -18,7 +19,12 @@ from grep_ips.grep_ips import GrepIPs
 def cli():
     import argparse  # https://docs.python.org/3/library/argparse.html
 
-    formatter_class = lambda prog: argparse.HelpFormatter(prog, max_help_position=37)
+    help_width = None if sys.stdout.isatty() else 78  # consistent width for README.py
+    formatter_class = lambda prog: argparse.HelpFormatter(
+        prog,
+        max_help_position=37,
+        width=help_width,
+    )
     parser = argparse.ArgumentParser(
         description="Fast, fault-tolerant public IP address retrieval from Python or CLI.",
         formatter_class=formatter_class,
