@@ -225,26 +225,49 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
     total_rtt: int = 0  # total rtt (in ms) for all successful attempts
     last_errmsg: str = ""
 
+    class Ptask(Enum):
+        IP_HTTP = 'I'  # get IP via http
+        IP_HTTPS = 'J'  # get IP via https
+        IP_DNS = 'D'  # get IP via DNS (not yet implemented)
+        IP_STUN = 'S'  # get IP via STUN (not yet implemented)
+        MD_HTTP = 'M'  # get IP metadata via http (not yet implemented)
+        MD_HTTPS = 'N'  # get IP metadata via https (not yet implemented)
+
+    @dataclass
+    class ParrotFields:
+        code: int  # unique id so we can safely copy future changes to user's DB
+        address: str  # URL without 'https://' or 'http://'
+        ip_version: int  # 0==both, 4==IPv4 only, 6==IPv6 only
+        ptasks: list  # Ptask list
+
+    @staticmethod
+    def parrot_data() -> ParrotFields:
+        for line in flock_data.split('\n'):
+            wout_comments = re.sub(r'( +|^)#.*\n?', '', line)  # strip comments
+            if len(wout_comments) == 0:
+                continue
+            fields = re.sub(r' +', ' ', wout_comments).split(' ')
+            assert len(fields) >= 3, f"invalid flock_data line: {line}"
+            yield Parrot.ParrotFields(
+                code=fields[0],
+                address=fields[1],
+                ip_version=int(fields[2]),
+                ptasks=fields[3:],
+            )
+
     @staticmethod
     def startup():
         with Session(engine) as session:
-            for line in parrot_data.split('\n'):
-                wout_comments = re.sub(r'( +|^)#.*\n?', '', line)  # strip comments
-                if len(wout_comments) == 0:
-                    continue
-                fields = re.sub(r' +', ' ', wout_comments).split(' ')
-                assert len(fields) >= 3, f"invalid parrot_data line: {line}"
+            for p in Parrot.parrot_data():
                 # do not adjust the Ptask list here except to append; .id is computed from it
-                for i, ptask in enumerate([Ptask.IP_HTTP, Ptask.IP_HTTPS]):
-                    address = fields[1]
-                    ip_version = int(fields[2])
+                for i, ptask in enumerate([Parrot.Ptask.IP_HTTP, Parrot.Ptask.IP_HTTPS]):
                     for v in (4, 6):  # IPv4, IPv6
                         ip_version_offset = 0 if v == 4 else 50  # IPv4 uses 0-49, IPv6 uses 50-99
-                        id = 2018260000 + int(fields[0]) * 100 + ip_version_offset + i
+                        id = 2018260000 + int(p.code) * 100 + ip_version_offset + i
                         statement = select(Parrot).where(Parrot.id == id)
                         result = session.exec(statement).one_or_none()
-                        ptask_active = ptask.value in fields[3:]
-                        ip_version_active = ip_version == 0 or ip_version == v
+                        ptask_active = ptask.value in p.ptasks
+                        ip_version_active = p.ip_version == 0 or p.ip_version == v
                         if result is None:  # no existing row in DB
                             if not (ptask_active and ip_version_active):
                                 continue  # not in DB and shouldn't be
@@ -257,16 +280,24 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
                                 result.milliweight = 1000  # make sure it is enabled
                         result.ptask = ptask.value
                         result.ip_version = v
-                        result.address = address
+                        result.address = p.address
                         session.add(result)
             session.commit()
 
+    @staticmethod
+    def acive_parrot_count():
+        result = 0
+        for p in Parrot.parrot_data():
+            if Parrot.Ptask.IP_HTTP.value in p.ptasks or Parrot.Ptask.IP_HTTPS.value in p.ptasks:
+                result += 1
+        return result
+
     def url(self):
-        if self.ptask == Ptask.IP_HTTP.value:
+        if self.ptask == Parrot.Ptask.IP_HTTP.value:
             return 'http://' + self.address
-        if self.ptask == Ptask.IP_HTTPS.value:
+        if self.ptask == Parrot.Ptask.IP_HTTPS.value:
             return 'https://' + self.address
-        assert ValueError, f"Ptask {Ptask(self.ptask).name} not yet implemented"
+        assert ValueError, f"Ptask {Parrot.Ptask(self.ptask).name} not yet implemented"
 
     def score(self):  # compute a score which will determine how likely it is to be chosen
         if self.attempt_count != 0:
@@ -361,22 +392,8 @@ async def get_ip(
     await q.put(fip)
 
 
-class Ptask(Enum):
-    IP_HTTP = 'I'  # get IP via http
-    IP_HTTPS = 'J'  # get IP via https
-    IP_DNS = 'D'  # get IP via DNS (not yet implemented)
-    IP_STUN = 'S'  # get IP via STUN (not yet implemented)
-    MD_HTTP = 'M'  # get IP metadata via http (not yet implemented)
-    MD_HTTPS = 'N'  # get IP metadata via https (not yet implemented)
-
-
-parrot_data = '''
-# **Do not change or reuse IDs** (fields[0])
-
-# fields[0] → parrot number (always unique so we can safely copy future changes to user's DB)
-# fields[1] → parrot address (URL without 'https://' or 'http://')
-# fields[2] → ip version (0==both, 4==IPv4 only, 6==IPv6 only)
-# fields[3:] → Ptask list
+flock_data = '''
+# **Do not change or reuse parrot codes** (column 0)
 
 # currently, each row can expand to 4 database rows (2 IP versions × http vs. https)
 
@@ -534,11 +551,11 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         statement = select(Parrot).where(Parrot.id == p_id)
                         p = db_session.exec(statement).one_or_none()
                         assert p is not None
-                        a = p_id - (p_id % 100)  # 100 IDs per parrot_data line
-                        b = a + 100  # top of range for a sinle parrot_data line
+                        a = p_id - (p_id % 100)  # 100 IDs per flock_data line
+                        b = a + 100  # top of range for a sinle flock_data line
                         ids_to_del = [k for k in scores.keys() if a <= k < b]
                         logger.debug(f"chose {p_id}, removing {ids_to_del}")
-                        for k in ids_to_del:  # eliminate all IDs from same parrot_data line, e.g.
+                        for k in ids_to_del:  # eliminate all IDs from same flock_data line, e.g.
                             del scores[k]  # don't check both http://ident.me and https://ident.me
                         logger.debug(f"launching task IPv{p.ip_version} {p.url()}")
                         asyncio.create_task(get_ip(p, aio_session, q, ip_version=args.ip_version))
