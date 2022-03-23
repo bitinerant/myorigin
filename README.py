@@ -1,5 +1,4 @@
 import myorigin
-import subprocess
 
 print(
     '''<p align="center">
@@ -29,7 +28,7 @@ $ myorigin -v
 $ 
 $ myorigin --help
 '''
-    + subprocess.Popen(['myorigin', '--help'], stdout=subprocess.PIPE).communicate()[0].decode()
+    + str(myorigin.myorigin.cli(return_help_text=True))
     + '''$ 
 ```
 

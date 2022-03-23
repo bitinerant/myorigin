@@ -6,7 +6,6 @@ import logging
 import platformdirs
 import random
 import socket
-import sys
 import os
 from sqlmodel import Session, SQLModel, create_engine, select
 import warnings
@@ -14,16 +13,17 @@ from grep_ips.grep_ips import GrepIPs
 from .parrots import Parrot
 
 
-def cli():
+def cli(return_help_text=False):
     import argparse  # https://docs.python.org/3/library/argparse.html
 
-    help_width = None if sys.stdout.isatty() else 78  # consistent width for README.py
+    help_width = 78 if return_help_text else None  # consistent width for README.py
     formatter_class = lambda prog: argparse.HelpFormatter(
         prog,
         max_help_position=37,
         width=help_width,
     )
     parser = argparse.ArgumentParser(
+        prog=app_name(),
         formatter_class=formatter_class,
     )
     parser.add_argument(
@@ -106,6 +106,8 @@ def cli():
         const=1,
         help="increase verbosity",
     )
+    if return_help_text:  # used by README.py
+        return parser.format_help()
     args = parser.parse_args()
     if args.show_api_providers:
         engine = init_db(args.dbfile)
@@ -136,6 +138,10 @@ class MyoriginArgs:  # see '--help' for descriptions
     logfile: str = '-'
     log_level: int = 0  # 0==disabled, 1==errors, 2==warnings, 3==info, 4==debug
     exception_level = 0  # 0==disabled, 1==raise exception for errors, 2==... for warnings, etc.
+
+
+def app_name():
+    return os.path.splitext(os.path.basename(__file__))[0]
 
 
 class NetworkError(Exception):
@@ -416,8 +422,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
 
 
 def db_pathname(create_dir=False):
-    appname = 'myorigin'
-    config_dir = platformdirs.user_config_dir(appname)
+    config_dir = platformdirs.user_config_dir(app_name())
     if create_dir:
         try:
             os.mkdir(config_dir)
