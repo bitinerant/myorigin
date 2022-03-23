@@ -1,6 +1,8 @@
+import myorigin
 import subprocess
 
-print('''<p align="center">
+print(
+    '''<p align="center">
   <img src="https://raw.githubusercontent.com/bitinerant/myorigin/main/logo.png" />
 </p>
 
@@ -27,8 +29,8 @@ $ myorigin -v
 $ 
 $ myorigin --help
 '''
-+ subprocess.Popen(['myorigin', '--help'], stdout=subprocess.PIPE).communicate()[0].decode()
-+ '''$ 
+    + subprocess.Popen(['myorigin', '--help'], stdout=subprocess.PIPE).communicate()[0].decode()
+    + '''$ 
 ```
 
 ### Library import usage
@@ -51,6 +53,17 @@ got error: 10 requests failed; giving up
 >>> 
 ```
 
+### Features
+
+* retrieves your IP address from any of '''
+    + str(myorigin.myorigin.Parrot.acive_parrot_count())
+    + ''' IP address providers
+* confirms the correct IP address by checking muliple providers (default 2)
+* recovers from failures by making additional requests of other providers
+* keeps a record of past successes and prioritizes the fastest and most reliable providers from your location
+* makes simultaneous IP address requests
+* supports http, https, IPv4, IPv6
+
 ### Similiar projects
 
 * [Go External IP](https://github.com/GlenDC/go-external-ip/): "a Golang library to get your external ip from multiple services"
@@ -60,5 +73,5 @@ got error: 10 requests failed; giving up
 
 
 *Did you find a mistake or have a suggestion? With a GitHub account, it's easy to [suggest changes](https://github.com/bitinerant/myorigin/blob/main/README.md).* ☺
-''')
-
+'''
+)
