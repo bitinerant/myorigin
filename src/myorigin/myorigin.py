@@ -421,15 +421,21 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     return result
 
 
+def mkdir_r(path):  # like Linux `mkdir --parents`
+    if path == '':
+        return
+    base = os.path.dirname(path)
+    if not os.path.exists(base):
+        mkdir_r(base)
+    os.makedirs(path, exist_ok=True)
+    # except (PermissionError, FileNotFoundError, NotADirectoryError):
+    #     one of these will be raised if the directory cannot be created
+
+
 def db_pathname(create_dir=False):
     config_dir = platformdirs.user_config_dir(app_name())
     if create_dir:
-        try:
-            os.mkdir(config_dir)
-        except FileExistsError:
-            pass
-        # except (PermissionError, FileNotFoundError):
-        #     one of these will be raised if the directory cannot be created
+        mkdir_r(config_dir)
     return os.path.join(config_dir, f'data.sqlite')
 
 
