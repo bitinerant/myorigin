@@ -24,7 +24,6 @@ def cli():
         width=help_width,
     )
     parser = argparse.ArgumentParser(
-        description="Fast, fault-tolerant public IP address retrieval from Python or CLI.",
         formatter_class=formatter_class,
     )
     parser.add_argument(
@@ -57,6 +56,13 @@ def cli():
         type=int,
         default=10,
         help="maximum number of simultaneous network connections allowed (default: 10)",
+    )
+    db_file_display = db_pathname().replace(os.path.expanduser('~'), '~')
+    parser.add_argument(
+        "--dbfile",
+        type=str,
+        default='',  # need to call db_pathname() again later with create_dir=True
+        help=f"path for database file ('-' for memory-only; default: {db_file_display})",
     )
     parser.add_argument(
         "--show-api-providers",
@@ -102,7 +108,7 @@ def cli():
     )
     args = parser.parse_args()
     if args.show_api_providers:
-        engine = init_db()
+        engine = init_db(args.dbfile)
         Parrot.show_parrot_db(engine)
         return
     del args.show_api_providers
@@ -119,12 +125,13 @@ def cli():
 
 
 @dataclass
-class MyoriginArgs:
+class MyoriginArgs:  # see '--help' for descriptions
     timeout: int = 12000
     minimum_match: int = 2
     overkill: int = 0
     max_failures: int = 10
     max_connections: int = 10
+    dbfile: str = ''  # ''==db_pathname(), '-'==none, other==alternate file
     ip_version: int = 0  # 0==either, 4==IPv4 only, 6==IPv6 only
     logfile: str = '-'
     log_level: int = 0  # 0==disabled, 1==errors, 2==warnings, 3==info, 4==debug
@@ -287,7 +294,7 @@ class DoneWithJobs(Exception):
 async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     result = ""
     error = None
-    engine = init_db()
+    engine = init_db(args.dbfile)
     with Session(engine) as db_session:
         scores = dict()
         if args.ip_version == 0:
@@ -408,22 +415,30 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     return result
 
 
-def init_db():
+def db_pathname(create_dir=False):
+    appname = 'myorigin'
+    config_dir = platformdirs.user_config_dir(appname)
+    if create_dir:
+        try:
+            os.mkdir(config_dir)
+        except FileExistsError:
+            pass
+        # except (PermissionError, FileNotFoundError):
+        #     one of these will be raised if the directory cannot be created
+    return os.path.join(config_dir, f'data.sqlite')
+
+
+def init_db(db_file=''):
     if hasattr(init_db, 'engine'):  # only need to initialize once
         return init_db.engine
-    appname = 'myorigin'
     GrepIPs.grep_ips_test()
     warnings.filterwarnings(  # https://github.com/tiangolo/sqlmodel/issues/189#issuecomment-1018014753
         "ignore", ".*Class SelectOfScalar will not make use of SQL compilation caching.*"
     )
-    config_dir = platformdirs.user_config_dir(appname)
-    try:
-        os.mkdir(config_dir)
-    except FileExistsError:
-        pass
-    # except (PermissionError, FileNotFoundError):
-    #     one of these will be raised if the directory cannot be created
-    db_file = os.path.join(config_dir, f'data.sqlite')
+    if db_file == '':  # use default location
+        db_file = db_pathname(create_dir=True)
+    elif db_file == '-':
+        db_file = ':memory:'
     init_db.engine = create_engine(f'sqlite:///{db_file}', echo=False)
     SQLModel.metadata.create_all(init_db.engine)
     Parrot.startup(init_db.engine)

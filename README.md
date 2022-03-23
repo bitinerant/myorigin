@@ -26,10 +26,8 @@ $
 $ myorigin --help
 usage: myorigin [-h] [-t TIMEOUT] [--minimum-match MINIMUM_MATCH]
                 [--overkill OVERKILL] [--max-failures MAX_FAILURES]
-                [--max-connections MAX_CONNECTIONS] [--show-api-providers]
-                [-4] [-6] [-l LOGFILE] [-q] [-v]
-
-Fast, fault-tolerant public IP address retrieval from Python or CLI.
+                [--max-connections MAX_CONNECTIONS] [--dbfile DBFILE]
+                [--show-api-providers] [-4] [-6] [-l LOGFILE] [-q] [-v]
 
 optional arguments:
   -h, --help                         show this help message and exit
@@ -44,6 +42,9 @@ optional arguments:
                                      (default: 10)
   --max-connections MAX_CONNECTIONS  maximum number of simultaneous network
                                      connections allowed (default: 10)
+  --dbfile DBFILE                    path for database file ('-' for memory-
+                                     only; default:
+                                     ~/.config/myorigin/data.sqlite)
   --show-api-providers               display the database of IP address API
                                      providers in a human-readable form and
                                      exit
