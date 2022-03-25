@@ -201,8 +201,9 @@ def http_timer():  # configure signals to record beginning and end of http reque
 
 async def http_get(url: str, session: aiohttp.ClientSession, max_size=-1, ip_version=0):
     timer_marks = list()
-    # change user agent string for better site compatibility
-    # via: wget -O- -q http://httpbin.org/get |grep User-Agent
+    # change user agent string for better site compatibility and anonymity, though one site
+    # ... suggests a Firefox user agent (https://www.whatismyip.com/automation-rules/);
+    # Wget agent retrieved via: wget -O- -q http://httpbin.org/get |grep User-Agent
     headers = {'User-Agent': 'Wget/1.20.3 (linux-gnu)'}
     # headers = {'User-Agent': 'Python/3.8 aiohttp/3.8.1'}  # default on my system
     try:
@@ -303,16 +304,15 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     engine = init_db(args.dbfile)
     with Session(engine) as db_session:
         scores = dict()
-        if args.ip_version == 0:
-            statement = select(Parrot)
-        else:  # if user wants IPv4 only, ignore IPv6 DB rows; vice-versa
-            statement = select(Parrot).where(Parrot.ip_version == args.ip_version)
-        all_parrots = db_session.exec(statement)
+        all_parrots = db_session.exec(select(Parrot))
         for p in all_parrots:
+            if args.ip_version != 0 and args.ip_version != p.ip_version():  # only ones user wants
+                continue
             score = p.score()
             if score <= 0:
                 continue
             scores[p.id] = score
+            logger.debug(f"record {p.id} score {score}")
         q = asyncio.Queue()  # great tutorial: https://realpython.com/async-io-python/
         if args.ip_version == 0:
             ip_family = 0
@@ -340,7 +340,6 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                     max_ipv0_count = 0  # max of IPv4 and IPv6
                     for v in (4, 6):
                         max_ip_count = 0 if len(ip_counts[v]) == 0 else max(ip_counts[v].values())
-                        # FIXME: for multiple IPs, maybe ensure most_common >= second_most_common + minimum_match more
                         if len(ip_counts[v]) > 1:
                             error = f"multiple IPs received: {ip_counts[v]}"
                             raise DoneWithJobs
@@ -359,27 +358,21 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         + f" want {wanted_count}, need {args.minimum_match}"
                     )
                     if args.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
-                        msg = f"not enough parrots for {wanted_count} requests"
+                        msg = f"not enough providers for {wanted_count} requests"
                         logger.warning(f"{msg}; ignoring '--overkill'")
                         args.overkill = 0
                         wanted_count = args.minimum_match + args.overkill
                     if wanted_count > jobs_count and pending_jobs_count < args.max_connections:
                         # TCPConnector(limit=...) does this too, but checking args.max_connections
-                        # ... here delays "not enough parrots" so we can collect more responses
+                        # ... here delays "not enough providers" so we can collect more responses
                         if len(scores) == 0:
-                            error = f"not enough parrots for {args.minimum_match} matches"
+                            error = f"not enough providers for {args.minimum_match} matches"
                             raise DoneWithJobs
                         p_id = weighted_random(scores)
                         statement = select(Parrot).where(Parrot.id == p_id)
                         p = db_session.exec(statement).one_or_none()
-                        assert p is not None
-                        a = p_id - (p_id % 100)  # 100 IDs per flock_data line
-                        b = a + 100  # top of range for a sinle flock_data line
-                        ids_to_del = [k for k in scores.keys() if a <= k < b]
-                        logger.debug(f"chose {p_id}, removing {ids_to_del}")
-                        for k in ids_to_del:  # eliminate all IDs from same flock_data line, e.g.
-                            del scores[k]  # don't check both http://ident.me and https://ident.me
-                        logger.debug(f"launching task IPv{p.ip_version} {p.url()}")
+                        p.del_keys_of_same_parrot(scores, logger)  # don't use this parrot again
+                        logger.debug(f"launching task {p.id}")
                         asyncio.create_task(get_ip(p, aio_session, q, ip_version=args.ip_version))
                         pending_jobs_count += 1
                     await asyncio.sleep(0.0001)

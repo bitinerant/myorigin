@@ -3,76 +3,66 @@ from enum import Enum
 import re
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
-
 flock_data = '''
-# **Do not change or reuse parrot codes** (column 0)
+#field 0: unique parrot name
+#field 1: address without http or https  
+#field 2: ip_version (0 (both) or 4 or 6)
+#field 3: protocol (p (http only) or s (https only) or b (both) or x (disabled))
+#everything after # is a comment
 
-# currently, each row can expand to 4 database rows (2 IP versions × http vs. https)
-
-00 icanhazip.com/                            0 I J
-01 ip1.dynupdate.no-ip.com/                  4 I
-02 myip.dnsomatic.com/                       4 I J
-03 smart-ip.net/myip                         0             # cannot connect
-04 ipecho.net/plain                          4   J
-05 ident.me/                                 0 I J M N     # https://api.ident.me/
-06 tnedi.me/                                 0 I J M N     # https://ipa.tnedi.me/
-07 ip.appspot.com/                           0             # 503 Service Unavailable
-08 checkip.dyndns.org/                       4 I
-09 www.lawrencegoetz.com/programs/ipinfo/    0             # no API
-10 shtuff.it/myip/short/                     0             # cannot connect
-11 ifconfig.me/ip                            4 I J
-12 www.google.com/search?q=my+ip             0             # 403 Forbidden
-13 bot.whatismyipaddress.com/                0             # API discontinued "due to massive abuse"
-14 ipv4.ipogre.com/                          0             # Connection timeout
-15 automation.whatismyip.com/n09230945.asp   0             # API discontinued?
-16 myipis.net/                               0             # API discontinued?
-17 www.ipchicken.com/                        4   J
-18 myip.com.tw/                              4   J
-19 httpbin.org/ip                            4 I J
-20 ip.nf/me.txt                              4   J   N
-21 am.i.mullvad.net/ip                       0   J
-22 am.i.mullvad.net/json                     0       N     # https://mullvad.net/en/check/
-23 zx2c4.com/ip                              0 I J
-24 ip.websupport.sk/                         0 I J
-25 www.ivpn.net/                             0   J
-26 www.ipaddress.com/                        0             # API discontinued?
-27 www.ipaddress.my/                         0   J
-28 www.showmyip.com/                         0             # no API
-29 ip-api.com/line/?fields=query             4 I
-30 ip-api.com/json/?fields=16966359          0     M       # https://ip-api.com/docs/
-31 api.ipify.org/                            4 I J
-32 ifconfig.io/ip                            0 I J
-33 ipaddress.sh/                             4 I J
-34 api.iplocation.net/?ip={ip}               0       N     # https://api.iplocation.net/
-35 ipinfo.io/ip                              4 I J
-36 ipinfo.io/{ip}/json                       4       N
-37 api.ipregistry.co/?key=tryout             0 I J   N     # https://ipregistry.co/docs/
-38 myexternalip.com/raw                      4 I J
-39 checkip.amazonaws.com/                    4 I J
-40 diagnostic.opendns.com/myip               0             # cannot connect
-41 whatismyip.akamai.com/                    0             # cannot connect
-42 test-ipv6.com/ip/                         4 I J         # ironically, no IPv6 AAAA record
-43 api.infoip.io/                            4 I J M N     # https://ciokan.docs.apiary.io/
-44 checkip.dns.he.net/                       0 I J
-45 ipapi.co/ip                               0   J
-46 www.cloudflare.com/cdn-cgi/trace          0 I J
-47 www.trackip.net/ip                        0 I J
-48 www.trackip.net/ip?json                   0     M N
-49 mypubip.com/                              0 I J
-50 ip.seeip.org/                             0   J
-51 ip.seeip.org/geoip                        0     M N
-52 api.bigdatacloud.net/data/client-ip       4 I J
-53 myip.opendns.com%20A%20@resolver1.opendns.com   0   D  
-54 o-o.myaddr.l.google.com%20TXT%20@8.8.8.8        0   D  
-55 whoami.akamai.net%20ANY%20@ns1-1.akamaitech.net 0   D  
+icanhazip.com         icanhazip.com/                   0 b
+dynupdate.no-ip.com   ip1.dynupdate.no-ip.com/         4 p
+dnsomatic.com         myip.dnsomatic.com/              4 b
+smart-ip.net          smart-ip.net/myip                0 x # cannot connect
+ipecho.net            ipecho.net/plain                 4 s
+ident.me              ident.me/                        0 b # https://api.ident.me/
+tnedi.me              tnedi.me/                        0 b # https://ipa.tnedi.me/
+appspot.com           ip.appspot.com/                  0 x # 503 Service Unavailable
+dyndns.org            checkip.dyndns.org/              4 p
+lawrencegoetz.com     www.lawrencegoetz.com/programs/ipinfo/ 0 x # no API
+shtuff.it             shtuff.it/myip/short/            0 x # cannot connect
+ifconfig.me           ifconfig.me/ip                   4 b
+google.com            www.google.com/search?q=my+ip    0 x # 403 Forbidden
+whatismyipaddress.com bot.whatismyipaddress.com/       0 x # "due to massive abuse"
+ipogre.com            ipv4.ipogre.com/                 0 x # Connection timeout
+whatismyip.com        automation.whatismyip.com/n09230945.asp 0 x # API discontinued?
+myipis.net            myipis.net/                      0 x # API discontinued?
+ipchicken.com         www.ipchicken.com/               4 s
+myip.com.tw           myip.com.tw/                     4 s
+httpbin.org           httpbin.org/ip                   4 b
+ip.nf                 ip.nf/me.txt                     4 s
+am.i.mullvad.net      am.i.mullvad.net/ip              0 s
+zx2c4.com             zx2c4.com/ip                     0 b
+websupport.sk         ip.websupport.sk/                0 b
+ivpn.net              www.ivpn.net/                    0 s
+ipaddress.com         www.ipaddress.com/               0 x # API discontinued?
+ipaddress.my          www.ipaddress.my/                0 s
+showmyip.com          www.showmyip.com/                0 x # no API
+ip-api.com            ip-api.com/line/?fields=query    4 p
+ipify.org             api.ipify.org/                   4 b
+ifconfig.io           ifconfig.io/ip                   0 b
+ipaddress.sh          ipaddress.sh/                    4 b
+ipinfo.io             ipinfo.io/ip                     4 b
+ipregistry.co         api.ipregistry.co/?key=tryout    0 b # https://ipregistry.co/docs/
+myexternalip.com      myexternalip.com/raw             4 b
+amazonaws.com         checkip.amazonaws.com/           4 b
+opendns.com           diagnostic.opendns.com/myip      0 x # cannot connect
+whatismyip.akamai.com whatismyip.akamai.com/           0 x # cannot connect
+test-ipv6.com         test-ipv6.com/ip/                4 b # ironically, no IPv6 AAAA record
+infoip.io             api.infoip.io/                   4 b # https://ciokan.docs.apiary.io/
+dns.he.net            checkip.dns.he.net/              0 b
+ipapi.co              ipapi.co/ip                      0 s
+cloudflare.com        www.cloudflare.com/cdn-cgi/trace 0 b
+trackip.net           www.trackip.net/ip               0 b
+mypubip.com           mypubip.com/                     0 b
+seeip.org             ip.seeip.org/                    0 s
+bigdatacloud.net      api.bigdatacloud.net/data/client-ip 4 b
 '''
 
 
 class Parrot(SQLModel, table=True):  # data for one interface of an API provider
-    # (Parrots repeats what they hear. A my-IP API provider repeats the callers IP back to them.)
-    id: int = Field(primary_key=True)
-    ptask: str  # one of: 'I', 'J', 'D', 'S', 'M', 'N'
-    ip_version: int  # always 4 or 6
+    # (Parrots repeats what they hear. A my-IP API provider repeats the caller's IP back to them.)
+    id: str = Field(primary_key=True)  # e.g. "0b.ipapi.co"; {ip_version}{proto}.{parrot_name}
     address: str  # host+path (URL without protocol)
     milliweight: int = 1000  # 2000 means 2x more likely to be used; 0 means disabled
     attempt_count: int = 0  # number of attempted connections
@@ -80,20 +70,25 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
     total_rtt: int = 0  # total rtt (in ms) for all successful attempts
     last_errmsg: str = ""
 
-    class Ptask(Enum):
-        IP_HTTP = 'I'  # get IP via http
-        IP_HTTPS = 'J'  # get IP via https
-        IP_DNS = 'D'  # get IP via DNS (not yet implemented)
-        IP_STUN = 'S'  # get IP via STUN (not yet implemented)
-        MD_HTTP = 'M'  # get IP metadata via http (not yet implemented)
-        MD_HTTPS = 'N'  # get IP metadata via https (not yet implemented)
+    def ip_version(self) -> int:  # always 4 or 6
+        return int(self.id[0])
+
+    def proto(self) -> str:  # always 'p' (http) or 's' (https)
+        return self.id[1]
+
+    def url(self):
+        if self.proto() == 'p':
+            return 'http://' + self.address
+        if self.proto() == 's':
+            return 'https://' + self.address
+        assert ValueError, f"Not yet implemented"
 
     @dataclass
     class ParrotFields:
-        code: int  # unique id so we can safely copy future changes to user's DB
+        name: int  # unique name so we can safely copy future changes to user's DB
         address: str  # URL without 'https://' or 'http://'
         ip_version: int  # 0==both, 4==IPv4 only, 6==IPv6 only
-        ptasks: list  # Ptask list
+        proto: str  # p==http only, s==https only, b==both, x==disabled
 
     @staticmethod
     def parrot_data() -> ParrotFields:
@@ -102,57 +97,45 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
             if len(wout_comments) == 0:
                 continue
             fields = re.sub(r' +', ' ', wout_comments).split(' ')
-            assert len(fields) >= 3, f"invalid flock_data line: {line}"
+            assert len(fields) == 4, f"invalid flock_data line: {line}"
+            assert fields[2] in ('0', '4', '6'), f"invalid flock_data line: {line}"
+            assert fields[3] in ('p', 's', 'b', 'x'), f"invalid flock_data line: {line}"
             yield Parrot.ParrotFields(
-                code=fields[0],
+                name=fields[0],
                 address=fields[1],
                 ip_version=int(fields[2]),
-                ptasks=fields[3:],
+                proto=fields[3],
             )
 
     @staticmethod
     def startup(engine):
         with Session(engine) as session:
-            for p in Parrot.parrot_data():
-                # do not adjust the Ptask list here except to append; .id is computed from it
-                for i, ptask in enumerate([Parrot.Ptask.IP_HTTP, Parrot.Ptask.IP_HTTPS]):
-                    for v in (4, 6):  # IPv4, IPv6
-                        ip_version_offset = 0 if v == 4 else 50  # IPv4 uses 0-49, IPv6 uses 50-99
-                        id = 2018260000 + int(p.code) * 100 + ip_version_offset + i
+            for row in Parrot.parrot_data():  # one row in flock_data text
+                for v in (4, 6):  # IPv4, IPv6
+                    for p in ('p', 's'):  # http, https
+                        id = f'{v}{p}.{row.name}'
+                        proto_active = row.proto == p or row.proto == 'b'
+                        ip_version_active = row.ip_version == 0 or row.ip_version == v
                         statement = select(Parrot).where(Parrot.id == id)
-                        result = session.exec(statement).one_or_none()
-                        ptask_active = ptask.value in p.ptasks
-                        ip_version_active = p.ip_version == 0 or p.ip_version == v
-                        if result is None:  # no existing row in DB
-                            if not (ptask_active and ip_version_active):
-                                continue  # not in DB and shouldn't be
-                            result = Parrot()  # add new row to database for this Ptask
-                            result.id = id
-                        else:  # existing row in DB
-                            if not (ptask_active and ip_version_active):
-                                result.milliweight = 0  # disable in DB
-                            else:
-                                result.milliweight = 1000  # make sure it is enabled
-                        result.ptask = ptask.value
-                        result.ip_version = v
-                        result.address = p.address
-                        session.add(result)
+                        record = session.exec(statement).one_or_none()
+                        if record is None:  # no existing record in DB
+                            record = Parrot()  # add new record to database
+                            record.id = id
+                        if proto_active and ip_version_active:
+                            record.milliweight = 1000  # enable in case it was previously disabled
+                        else:
+                            record.milliweight = 0  # disable in DB
+                        record.address = row.address
+                        session.add(record)
             session.commit()
 
     @staticmethod
     def acive_parrot_count():
-        result = 0
+        total = 0
         for p in Parrot.parrot_data():
-            if Parrot.Ptask.IP_HTTP.value in p.ptasks or Parrot.Ptask.IP_HTTPS.value in p.ptasks:
-                result += 1
-        return result
-
-    def url(self):
-        if self.ptask == Parrot.Ptask.IP_HTTP.value:
-            return 'http://' + self.address
-        if self.ptask == Parrot.Ptask.IP_HTTPS.value:
-            return 'https://' + self.address
-        assert ValueError, f"Ptask {Parrot.Ptask(self.ptask).name} not yet implemented"
+            if p.proto in ('p', 's', 'b'):
+                total += 1
+        return total
 
     def score(self):  # compute a score which will determine how likely it is to be chosen
         if self.attempt_count != 0:
@@ -169,27 +152,38 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
         score *= self.milliweight  # normally 1000, but can be 0 to disable or more to promote
         return score
 
+    def del_keys_of_same_parrot(self, scores_dict, logger=None):
+        p_name = self.id[3:]  # parrot name without ip_version, proto
+        ids_to_del = [k for k in scores_dict.keys() if k[3:] == p_name]
+        if logger:
+            logger.debug(f"chose {self.id}, removing {', '.join(ids_to_del)}")
+        for k in ids_to_del:  # eliminate all IDs from same flock_data line, e.g.
+            del scores_dict[k]  # don't check both http://ident.me and https://ident.me
+
     @staticmethod
     def show_parrot_db(engine):
         with Session(engine) as session:
             to_show = dict()
             results = session.exec(select(Parrot))
-            for p in results:
-                score = p.score()
+            for record in results:
+                score = record.score()
+                if score <= 0:
+                    continue  # don't display disabled records
                 disp = ""
-                disp += f"ipv{p.ip_version}.{p.url()}:\n"
-                if p.attempt_count != 0:
-                    percent = round(100.0 * p.success_count / p.attempt_count)
+                disp += f"ipv{record.ip_version()}.{record.url()}:\n"
+                if record.attempt_count != 0:
+                    percent = round(100.0 * record.success_count / record.attempt_count)
                     disp += f"    {percent}% success rate"
-                    disp += f" ({p.success_count} of {p.attempt_count})\n"
+                    disp += f" ({record.success_count} of {record.attempt_count})\n"
                 else:
                     disp += f"    not yet attempted\n"
-                if p.success_count != 0:
-                    average_ms = round(1.0 * p.total_rtt / p.success_count)
+                if record.success_count != 0:
+                    average_ms = round(1.0 * record.total_rtt / record.success_count)
                     disp += f"    {average_ms} ms average round trip time\n"
-                if len(p.last_errmsg) > 0:
-                    disp += f"    most recent error: {p.last_errmsg[:70]}\n"
+                if len(record.last_errmsg) > 0:
+                    disp += f"    most recent error: {record.last_errmsg[:70]}\n"
                 disp += f"    score: {round(score/1000):,} points\n"
-                to_show[score * 1000000 + p.id] = disp  # sortable, unique key
-            for p in dict(sorted(to_show.items(), reverse=True)):
-                print(to_show[p], end="")
+                to_show[f'{score:08}.{record.id}'] = disp  # sortable, unique key
+            for key in dict(sorted(to_show.items(), reverse=True)):
+                print(to_show[key], end="")
+
