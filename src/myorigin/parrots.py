@@ -8,7 +8,7 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 class Parrot(SQLModel, table=True):  # data for one interface of an API provider
     # (Parrots repeats what they hear. A my-IP API provider repeats the caller's IP back to them.)
     id: str = Field(primary_key=True)  # e.g. "0b.ipapi.co"; {ip_version}{proto}.{parrot_name}
-    address: str  # host+path (URL without protocol)
+    address: str = ""  # host+path (URL without protocol)
     milliweight: int = 1000  # 2000 means 2x more likely to be used; 0 means disabled
     attempt_count: int = 0  # number of attempted connections
     success_count: int = 0  # number of valid IP addresses returned
@@ -57,7 +57,7 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
         with Session(engine) as session:
             statement = select(Parrot).where(Parrot.id == '4p.__version__')
             record = session.exec(statement).one_or_none()
-            flock_data_version = 'v10092'  # add 1 when a change is made to flock_data.py
+            flock_data_version = 'v10093'  # add 1 when a change is made to flock_data.py
             if record and record.address >= flock_data_version:  # database is up-to-date
                 return
             logger = logging.getLogger('myorigin')
@@ -92,10 +92,10 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
                             record.milliweight = 1000  # enable in case it was previously disabled
                         else:
                             record.milliweight = 0  # disable in DB
-                        if record.address != row.address:
+                        if record.address != row.address and record.address != "":
                             msg = f"updating record {id}"
                             logger.debug(f"{msg} from {record.address} to {row.address}")
-                            record.address = row.address
+                        record.address = row.address
                         session.add(record)
             session.commit()
 
