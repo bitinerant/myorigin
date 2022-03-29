@@ -1,63 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum
+import logging
 import re
 from sqlmodel import Field, Session, SQLModel, create_engine, select
-
-flock_data = '''
-#field 0: unique parrot name
-#field 1: address without http or https  
-#field 2: ip_version (0 (both) or 4 or 6)
-#field 3: protocol (p (http only) or s (https only) or b (both) or x (disabled))
-#everything after # is a comment
-
-icanhazip.com         icanhazip.com/                   0 b
-dynupdate.no-ip.com   ip1.dynupdate.no-ip.com/         4 p
-dnsomatic.com         myip.dnsomatic.com/              4 b
-smart-ip.net          smart-ip.net/myip                0 x # cannot connect
-ipecho.net            ipecho.net/plain                 4 s
-ident.me              ident.me/                        0 b # https://api.ident.me/
-tnedi.me              tnedi.me/                        0 b # https://ipa.tnedi.me/
-appspot.com           ip.appspot.com/                  0 x # 503 Service Unavailable
-dyndns.org            checkip.dyndns.org/              4 p
-lawrencegoetz.com     www.lawrencegoetz.com/programs/ipinfo/ 0 x # no API
-shtuff.it             shtuff.it/myip/short/            0 x # cannot connect
-ifconfig.me           ifconfig.me/ip                   4 b
-google.com            www.google.com/search?q=my+ip    0 x # 403 Forbidden
-whatismyipaddress.com bot.whatismyipaddress.com/       0 x # "due to massive abuse"
-ipogre.com            ipv4.ipogre.com/                 0 x # Connection timeout
-whatismyip.com        automation.whatismyip.com/n09230945.asp 0 x # API discontinued?
-myipis.net            myipis.net/                      0 x # API discontinued?
-ipchicken.com         www.ipchicken.com/               4 s
-myip.com.tw           myip.com.tw/                     4 s
-httpbin.org           httpbin.org/ip                   4 b
-ip.nf                 ip.nf/me.txt                     4 s
-am.i.mullvad.net      am.i.mullvad.net/ip              0 s
-zx2c4.com             zx2c4.com/ip                     0 b
-websupport.sk         ip.websupport.sk/                0 b
-ivpn.net              www.ivpn.net/                    0 s
-ipaddress.com         www.ipaddress.com/               0 x # API discontinued?
-ipaddress.my          www.ipaddress.my/                0 s
-showmyip.com          www.showmyip.com/                0 x # no API
-ip-api.com            ip-api.com/line/?fields=query    4 p
-ipify.org             api.ipify.org/                   4 b
-ifconfig.io           ifconfig.io/ip                   0 b
-ipaddress.sh          ipaddress.sh/                    4 b
-ipinfo.io             ipinfo.io/ip                     4 b
-ipregistry.co         api.ipregistry.co/?key=tryout    0 b # https://ipregistry.co/docs/
-myexternalip.com      myexternalip.com/raw             4 b
-amazonaws.com         checkip.amazonaws.com/           4 b
-opendns.com           diagnostic.opendns.com/myip      0 x # cannot connect
-whatismyip.akamai.com whatismyip.akamai.com/           0 x # cannot connect
-test-ipv6.com         test-ipv6.com/ip/                4 b # ironically, no IPv6 AAAA record
-infoip.io             api.infoip.io/                   4 b # https://ciokan.docs.apiary.io/
-dns.he.net            checkip.dns.he.net/              0 b
-ipapi.co              ipapi.co/ip                      0 s
-cloudflare.com        www.cloudflare.com/cdn-cgi/trace 0 b
-trackip.net           www.trackip.net/ip               0 b
-mypubip.com           mypubip.com/                     0 b
-seeip.org             ip.seeip.org/                    0 s
-bigdatacloud.net      api.bigdatacloud.net/data/client-ip 4 b
-'''
 
 
 class Parrot(SQLModel, table=True):  # data for one interface of an API provider
@@ -91,7 +36,7 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
         proto: str  # p==http only, s==https only, b==both, x==disabled
 
     @staticmethod
-    def parrot_data() -> ParrotFields:
+    def parrot_data(flock_data: str) -> ParrotFields:
         for line in flock_data.split('\n'):
             wout_comments = re.sub(r'( +|^)#.*\n?', '', line)  # strip comments
             if len(wout_comments) == 0:
@@ -110,7 +55,26 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
     @staticmethod
     def startup(engine):
         with Session(engine) as session:
-            for row in Parrot.parrot_data():  # one row in flock_data text
+            statement = select(Parrot).where(Parrot.id == '4p.__version__')
+            record = session.exec(statement).one_or_none()
+            flock_data_version = 'v10092'  # add 1 when a change is made to flock_data.py
+            if record and record.address >= flock_data_version:  # database is up-to-date
+                return
+            logger = logging.getLogger('myorigin')
+            if record is not None:
+                msg = "updating flock_data_version"
+                logger.debug(f"{msg} from {record.address} to {flock_data_version}")
+            else:
+                logger.debug(f"updating flock_data_version from (none) to {flock_data_version}")
+            if record is None:
+                record = Parrot()
+                record.id = '4p.__version__'
+                record.milliweight = 0  # ensure we don't try to connect
+            record.address = flock_data_version
+            session.add(record)
+            if True:
+                from .flock_data import flock_data
+            for row in Parrot.parrot_data(flock_data):  # one row in flock_data text
                 for v in (4, 6):  # IPv4, IPv6
                     for p in ('p', 's'):  # http, https
                         id = f'{v}{p}.{row.name}'
@@ -119,20 +83,28 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
                         statement = select(Parrot).where(Parrot.id == id)
                         record = session.exec(statement).one_or_none()
                         if record is None:  # no existing record in DB
+                            if not (proto_active and ip_version_active):
+                                continue  # no need to add disabled records
                             record = Parrot()  # add new record to database
                             record.id = id
+                            logger.debug(f"adding record {id}")
                         if proto_active and ip_version_active:
                             record.milliweight = 1000  # enable in case it was previously disabled
                         else:
                             record.milliweight = 0  # disable in DB
-                        record.address = row.address
+                        if record.address != row.address:
+                            msg = f"updating record {id}"
+                            logger.debug(f"{msg} from {record.address} to {row.address}")
+                            record.address = row.address
                         session.add(record)
             session.commit()
 
     @staticmethod
     def acive_parrot_count():
         total = 0
-        for p in Parrot.parrot_data():
+        if True:
+            from .flock_data import flock_data
+        for p in Parrot.parrot_data(flock_data):
             if p.proto in ('p', 's', 'b'):
                 total += 1
         return total
