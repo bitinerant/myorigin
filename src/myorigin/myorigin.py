@@ -159,7 +159,7 @@ def my_ip(args: MyoriginArgs) -> str:
         filename=args.logfile if args.logfile != '-' else None,
         filemode='a',
     )
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger('myorigin')
     log_levels = [logging.CRITICAL, logging.ERROR, logging.WARNING, logging.INFO, logging.DEBUG]
     try:
         logger.setLevel(log_levels[args.log_level])
@@ -312,7 +312,6 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
             if score <= 0:
                 continue
             scores[p.id] = score
-            logger.debug(f"record {p.id} score {score}")
         q = asyncio.Queue()  # great tutorial: https://realpython.com/async-io-python/
         if args.ip_version == 0:
             ip_family = 0
@@ -353,10 +352,16 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                     # spawn another get_ip() job if needed
                     wanted_count = args.minimum_match + args.overkill
                     jobs_count = max_ipv0_count + pending_jobs_count
-                    logger.debug(
-                        f"have {max_ipv0_count} IPs plus {pending_jobs_count} pending,"
-                        + f" want {wanted_count}, need {args.minimum_match}"
-                    )
+                    if logger.isEnabledFor(logging.DEBUG):
+                        try:
+                            last_debug_msg = main_loop.last_debug_msg
+                        except AttributeError:
+                            last_debug_msg = ""
+                        msg = f"have {max_ipv0_count} IPs plus {pending_jobs_count} pending,"
+                        msg += f" want {wanted_count}, need {args.minimum_match}"
+                        if msg != last_debug_msg:  # avoid repeating the same message
+                            logger.debug(msg)
+                        main_loop.last_debug_msg = msg
                     if args.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
                         msg = f"not enough providers for {wanted_count} requests"
                         logger.warning(f"{msg}; ignoring '--overkill'")
@@ -371,10 +376,10 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         p_id = weighted_random(scores)
                         statement = select(Parrot).where(Parrot.id == p_id)
                         p = db_session.exec(statement).one_or_none()
-                        p.del_keys_of_same_parrot(scores, logger)  # don't use this parrot again
-                        logger.debug(f"launching task {p.id}")
                         asyncio.create_task(get_ip(p, aio_session, q, ip_version=args.ip_version))
                         pending_jobs_count += 1
+                        logger.debug(f"launching task {p.id}")
+                        p.del_keys_of_same_parrot(scores, logger)  # don't use this parrot again
                     await asyncio.sleep(0.0001)
                     # process completed jobs
                     try:

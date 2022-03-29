@@ -156,7 +156,7 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
         p_name = self.id[3:]  # parrot name without ip_version, proto
         ids_to_del = [k for k in scores_dict.keys() if k[3:] == p_name]
         if logger:
-            logger.debug(f"chose {self.id}, removing {', '.join(ids_to_del)}")
+            logger.debug(f"removing {', '.join(ids_to_del)}")
         for k in ids_to_del:  # eliminate all IDs from same flock_data line, e.g.
             del scores_dict[k]  # don't check both http://ident.me and https://ident.me
 
@@ -186,4 +186,3 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
                 to_show[f'{score:08}.{record.id}'] = disp  # sortable, unique key
             for key in dict(sorted(to_show.items(), reverse=True)):
                 print(to_show[key], end="")
-
