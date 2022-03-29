@@ -69,6 +69,7 @@ got error: 10 requests failed; giving up
 * [gip](https://github.com/dalance/gip/): "a command-line tool to get global IP address"; written in Rust
 * [Discovering public IP programmatically](https://stackoverflow.com/questions/613471): Stack Overflow discussion (16 answers)
 * [PyNAT](https://github.com/aarant/pynat): "Discover external IP addresses and NAT topologies using STUN"
+* [pubip](https://github.com/thibran/pubip): "get public IP address"; written in Go
 
 
 *Did you find a mistake or have a suggestion? With a GitHub account, it's easy to [suggest changes](https://github.com/bitinerant/myorigin/blob/main/README.md).* ☺
