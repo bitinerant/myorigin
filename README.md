@@ -85,7 +85,7 @@ got error: 10 requests failed; giving up
 
 ### Features
 
-* retrieves your IP address from any of 136 IP address providers
+* retrieves your IP address from any of 135 IP address providers
 * confirms the correct IP address by checking muliple providers (default 2)
 * recovers from failures by making additional requests of other providers
 * keeps a record of past successes and prioritizes the fastest and most reliable providers from your location

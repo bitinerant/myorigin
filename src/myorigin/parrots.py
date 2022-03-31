@@ -57,7 +57,7 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
         with Session(engine) as session:
             statement = select(Parrot).where(Parrot.id == '4p.__version__')
             record = session.exec(statement).one_or_none()
-            flock_data_version = 'v10093'  # add 1 when a change is made to flock_data.py
+            flock_data_version = 'v10094'  # add 1 when a change is made to flock_data.py
             if record and record.address >= flock_data_version:  # database is up-to-date
                 return
             logger = logging.getLogger('myorigin')

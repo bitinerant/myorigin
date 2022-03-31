@@ -204,7 +204,7 @@ myip.knet.ca          myip.knet.ca/                    4 s
 myip.kz               myip.kz/                         4 s
 myip.ma               myip.ma/                         4 b
 myip.ms               api.myip.ms/ip                   0 x # No IP address found
-myip.mx               myip.mx/                         4 s
+myip.mx               myip.mx/                         0 x # Connection timeout to host https:// ...
 myip.net              myip.net/                        0 x # Connection timeout to host http://m ...
 myip.nl               myip.nl/                         4 b
 myipnow.com           myipnow.com/                     4 s
