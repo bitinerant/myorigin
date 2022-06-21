@@ -411,7 +411,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                     await asyncio.sleep(0.0001)
             except DoneWithJobs:
                 pass
-        connector.close()
+        await connector.close()
     if error is not None:
         logger.error(error)
         if args.exception_level >= 1:
