@@ -9,6 +9,12 @@ print(
 
 Fast, fault-tolerant public IP address retrieval from Python or CLI.
 
+The primary goal of this project is to find the public IP address (sometimes called an external
+IP address) *reliably*. This means it works with or without UPnP, dual NAT, DNS manipulation by
+the ISP, a VPN, or any single public web API or STUN server. It simultaneously queries multiple
+external sources at random from a long list, recovers gracefully from failed queries, and does
+not return an IP address unless all the responses agree.
+
 ### Installation
 
 ```
@@ -62,6 +68,11 @@ got error: 10 requests failed; giving up
 * keeps a record of past successes and prioritizes the fastest and most reliable providers from your location
 * makes simultaneous IP address requests
 * supports http, https, IPv4, IPv6
+
+### Limitations
+
+* has only been tested on Ubuntu Linux, though, being 100% Python, this *should* work on Windows, macOS, other Linux and BSDs, etc.
+* has not been field-tested
 
 ### Similiar projects
 
