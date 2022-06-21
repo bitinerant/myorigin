@@ -437,10 +437,9 @@ def db_pathname(create_dir=False):
     return os.path.join(config_dir, f'data.sqlite')
 
 
-def init_db(db_file=''):
+def init_db(db_file):
     if hasattr(init_db, 'engine'):  # only need to initialize once
         return init_db.engine
-    GrepIPs.grep_ips_test()
     warnings.filterwarnings(  # https://github.com/tiangolo/sqlmodel/issues/189#issuecomment-1018014753
         "ignore", ".*Class SelectOfScalar will not make use of SQL compilation caching.*"
     )
