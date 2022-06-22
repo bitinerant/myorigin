@@ -5,6 +5,7 @@ import ipaddress
 import logging
 import platformdirs
 import random
+import re
 import socket
 import os
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -199,7 +200,15 @@ def http_timer():  # configure signals to record beginning and end of http reque
     return trace_config
 
 
-async def http_get(url: str, session: aiohttp.ClientSession, max_size=-1, ip_version=0):
+async def http_get(url: str, session: aiohttp.ClientSession, max_size=-1):
+    if hasattr(http_get, 'pytest'):  # mock responses; see myorigin_test.py
+        if http_get.pytest == 1:
+            try:
+                return re.match(r'http.*/(.*)', url).group(1), 290  # whatever follows final slash
+            except:
+                return f'test html response with no IP address', 180
+        elif http_get.pytest == 2:
+            raise ValueError("404 pytest simulated error")
     timer_marks = list()
     # change user agent string for better site compatibility and anonymity, though one site
     # ... suggests a Firefox user agent (https://www.whatismyip.com/automation-rules/);
@@ -286,12 +295,6 @@ def weighted_random(options: dict):
             return k
         total -= weight
     assert False, f"bug in weighted_random, options {options}"
-    # #test:
-    # o = {200: 5, 202: 10, 203: 11, 210: 1, 214: 10}
-    # n = 1000  # number of iterations
-    # h = [k for k in [weighted_random(o) for i in range(n*sum(o.values()))]]
-    # r = dict(sorted({i:h.count(i)/n for i in h}.items()))
-    # #visually compare o and r
 
 
 class DoneWithJobs(Exception):

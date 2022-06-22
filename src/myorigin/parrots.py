@@ -72,7 +72,9 @@ class Parrot(SQLModel, table=True):  # data for one interface of an API provider
                 record.milliweight = 0  # ensure we don't try to connect
             record.address = flock_data_version
             session.add(record)
-            if True:
+            if hasattr(Parrot.startup, 'pytest'):  # mock responses; see myorigin_test.py
+                flock_data = Parrot.startup.pytest
+            else:
                 from .flock_data import flock_data
             for row in Parrot.parrot_data(flock_data):  # one row in flock_data text
                 for v in (4, 6):  # IPv4, IPv6
