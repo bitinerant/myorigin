@@ -328,26 +328,27 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
             limit=args.max_connections,
             family=ip_family,
         )
+        completed_jobs = list()
         async with aiohttp.ClientSession(
             connector=connector, timeout=http_timeout(args.timeout), trace_configs=[http_timer()]
         ) as aio_session:
             try:
                 logger.info(f"requests (need {args.minimum_match} matches):")
                 pending_jobs_count = 0
-                ip_counts = dict()
-                ip_counts[4] = dict()  # number of occurrences for each received IPv4
-                ip_counts[6] = dict()  # number of occurrences for each received IPv6
+                votes = dict()
+                votes[4] = dict()  # number of occurrences for each received IPv4
+                votes[6] = dict()  # number of occurrences for each received IPv6
                 fail_count = 0
                 while True:  # spawn and collect jobs
                     max_ipv0_count = 0  # max of IPv4 and IPv6
                     for v in (4, 6):
-                        max_ip_count = 0 if len(ip_counts[v]) == 0 else max(ip_counts[v].values())
-                        if len(ip_counts[v]) > 1:
-                            error = f"multiple IPs received: {ip_counts[v]}"
+                        max_ip_count = 0 if len(votes[v]) == 0 else max(votes[v].values())
+                        if len(votes[v]) > 1:
+                            error = f"multiple IPs received: {votes[v]}"
                             raise DoneWithJobs
                         if max_ip_count >= args.minimum_match:  # we have sufficient results
-                            ip = max(ip_counts[v], key=ip_counts[v].get)
-                            msg = f"IP found: {ip} ({ip_counts[v][ip]} successes,"
+                            ip = max(votes[v], key=votes[v].get)
+                            msg = f"IP found: {ip} ({votes[v][ip]} successes,"
                             logger.info(f"{msg} {fail_count} failures)")
                             result = ip
                             raise DoneWithJobs
@@ -387,25 +388,20 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                     # process completed jobs
                     try:
                         r: FetchedIP = q.get_nowait()  # may raise QueueEmpty
-                        r.parrot.attempt_count += 1
-                        if r.rtt != 0:  # got valid IP of some sort
-                            if r.ip != '':
-                                v = r.ip_version
-                                ip_counts[v][r.ip] = ip_counts[v].get(r.ip, 0) + 1
-                            r.parrot.success_count += 1
-                            r.parrot.total_rtt += r.rtt
-                            portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
+                        completed_jobs.append(r)  # keep a list to write to DB later
+                        if r.rtt != 0 and r.ip != '':  # got valid IP
+                            assert r.ip != ''
+                            v = r.ip_version
+                            votes[v][r.ip] = votes[v].get(r.ip, 0) + 1
+                            p = f"{r.parrot.success_count + 1} of {r.parrot.attempt_count + 1}"
                             msg = f"    {r.parrot.url()} → {r.ip} ({r.rtt} ms;"
-                            logger.info(f"{msg} {portion} succeeded)")
+                            logger.info(f"{msg} {p} succeeded)")
                         else:
-                            r.parrot.last_errmsg = r.ip
-                            portion = f"{r.parrot.success_count} of {r.parrot.attempt_count}"
+                            p = f"{r.parrot.success_count} of {r.parrot.attempt_count + 1}"
                             msg = f"    {r.parrot.url()} → {r.ip[:40]}"
-                            logger.info(f"{msg} ({portion} succeeded)")
+                            logger.info(f"{msg} ({p} succeeded)")
                             fail_count += 1
                         pending_jobs_count -= 1
-                        db_session.add(r.parrot)
-                        db_session.commit()
                         if fail_count >= args.max_failures:
                             error = f"{fail_count} requests failed; giving up"
                             raise DoneWithJobs
@@ -415,6 +411,15 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
             except DoneWithJobs:
                 pass
         await connector.close()
+        for r in completed_jobs:
+            r.parrot.attempt_count += 1
+            if r.rtt != 0:  # got valid IP of some sort
+                r.parrot.success_count += 1
+                r.parrot.total_rtt += r.rtt
+            else:
+                r.parrot.last_errmsg = r.ip
+            db_session.add(r.parrot)
+            db_session.commit()
     if error is not None:
         logger.error(error)
         if args.exception_level >= 1:
