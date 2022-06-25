@@ -1,5 +1,6 @@
 import asyncio
 import aiohttp
+from collections import Counter
 from dataclasses import dataclass
 import ipaddress
 import logging
@@ -46,6 +47,14 @@ def cli(return_help_text=False):
         type=int,
         default=0,
         help="number of initial requests to make beyond minimum-match (default: 0)",
+    )
+    parser.add_argument(
+        "--majority-ratio",
+        type=int,
+        default=3,
+        help="minimum ratio needed to overrule a conflicting response; must be an integer;"
+        + " a value of 2 means 2:1, or that 6 responses of 8.7.8.7 are needed to overrule"
+        + " 3 responses of 7.8.4.4 (default: 3)",
     )
     parser.add_argument(
         "--max-failures",
@@ -133,6 +142,7 @@ class MyoriginArgs:  # see '--help' for descriptions
     timeout: int = 12000
     minimum_match: int = 2
     overkill: int = 0
+    majority_ratio: int = 3
     max_failures: int = 10
     max_connections: int = 10
     dbfile: str = ''  # ''==db_pathname(), '-'==none, other==alternate file
@@ -336,26 +346,41 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
             try:
                 logger.info(f"requests (need {args.minimum_match} matches):")
                 pending_jobs_count = 0
-                votes = dict()
-                votes[4] = dict()  # number of occurrences for each received IPv4
-                votes[6] = dict()  # number of occurrences for each received IPv6
-                fail_count = 0
                 while True:  # spawn and collect jobs
                     top_ip_count = 0  # max of IPv4 and IPv6
+                    top_ip_target = args.minimum_match
                     for v in (4, 6):
-                        max_ip_count = 0 if len(votes[v]) == 0 else max(votes[v].values())
-                        if len(votes[v]) > 1:
-                            error = f"multiple IPs received: {votes[v]}"
+                        fail_count = sum(1 for r in completed_jobs if r.rtt == 0)
+                        if fail_count >= args.max_failures:
+                            error = f"{fail_count} requests failed; giving up"
                             raise DoneWithJobs
-                        if max_ip_count >= args.minimum_match:  # we have sufficient results
-                            ip = max(votes[v], key=votes[v].get)
-                            msg = f"IP found: {ip} ({votes[v][ip]} successes,"
+                        votes = Counter(
+                            [r.ip for r in completed_jobs if (r.ip_version == v and r.rtt != 0)]
+                        )
+                        if len(votes) == 0:
+                            continue
+                        ranked = sorted(votes.items(), key=lambda i: i[1], reverse=True)
+                        # ranked[0][0] is #1 candidate IP; ranked[0][1] is its vote count
+                        assert sum(1 for r in completed_jobs if (r.rtt != 0 and r.ip == '')) == 0
+                        if len(ranked) > 1:
+                            logger.info(f"multiple IPs received: {[k[0] for k in ranked]}")
+                        overrule = 0 if len(ranked) <= 1 else ranked[1][1] * args.majority_ratio
+                        target = max(args.minimum_match, overrule)  # votes necessary to win
+                        if ranked[0][1] >= target:  # #1 candidate has enough votes
+                            result = ranked[0][0]
+                            msg = f"IP found: {result} ({ranked[0][1]} successes,"
                             logger.info(f"{msg} {fail_count} failures)")
-                            result = ip
+                            if len(ranked) > 1:  # retroactively mark other candidates as failed
+                                for r in completed_jobs:
+                                    if r.ip_version == v and r.rtt != 0 and r.ip != result:
+                                        r.rtt = 0  # actually, it failed
+                                        r.ip = f'Incorrect IP returned: {r.ip}'
                             raise DoneWithJobs
-                        top_ip_count = max(top_ip_count, max_ip_count)
+                        # logger.info(f"{fail_count} fails for {len(completed_jobs)} jobs")
+                        top_ip_count = max(top_ip_count, ranked[0][1])
+                        top_ip_target = max(top_ip_target, target)
                     # spawn another get_ip() job if needed
-                    top_ip_bonus = args.minimum_match + args.overkill
+                    top_ip_bonus = top_ip_target + args.overkill
                     jobs_count = top_ip_count + pending_jobs_count
                     if logger.isEnabledFor(logging.DEBUG):
                         try:
@@ -363,7 +388,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         except AttributeError:
                             last_debug_msg = ""
                         msg = f"have {top_ip_count} IPs plus {pending_jobs_count} pending,"
-                        msg += f" want {top_ip_bonus}, need {args.minimum_match}"
+                        msg += f" want {top_ip_bonus}, need {top_ip_target}"
                         if msg != last_debug_msg:  # avoid repeating the same message
                             logger.debug(msg)
                         main_loop.last_debug_msg = msg
@@ -371,7 +396,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         msg = f"not enough providers for {top_ip_bonus} requests"
                         logger.warning(f"{msg}; ignoring '--overkill'")
                         args.overkill = 0
-                        top_ip_bonus = args.minimum_match + args.overkill
+                        top_ip_bonus = top_ip_target + args.overkill
                     if top_ip_bonus > jobs_count and pending_jobs_count < args.max_connections:
                         # TCPConnector(limit=...) does this too, but checking args.max_connections
                         # ... here delays "not enough providers" so we can collect more responses
@@ -385,15 +410,14 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                         pending_jobs_count += 1
                         logger.debug(f"launching task {p.id}")
                         p.del_keys_of_same_parrot(scores, logger)  # don't use this parrot again
+                        main_loop.last_debug_msg = ""  # repeat debug msg after launch even if same
                     await asyncio.sleep(0.0001)
                     # process completed jobs
                     try:
                         r: FetchedIP = q.get_nowait()  # may raise QueueEmpty
                         completed_jobs.append(r)  # keep a list to write to DB later
-                        if r.rtt != 0 and r.ip != '':  # got valid IP
-                            assert r.ip != ''
-                            v = r.ip_version
-                            votes[v][r.ip] = votes[v].get(r.ip, 0) + 1
+                        if r.rtt != 0:  # got valid IP
+                            # note success count will be wrong if IP is later found to be wrong
                             p = f"{r.parrot.success_count + 1} of {r.parrot.attempt_count + 1}"
                             msg = f"    {r.parrot.url()} → {r.ip} ({r.rtt} ms;"
                             logger.info(f"{msg} {p} succeeded)")
@@ -401,11 +425,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                             p = f"{r.parrot.success_count} of {r.parrot.attempt_count + 1}"
                             msg = f"    {r.parrot.url()} → {r.ip[:40]}"
                             logger.info(f"{msg} ({p} succeeded)")
-                            fail_count += 1
                         pending_jobs_count -= 1
-                        if fail_count >= args.max_failures:
-                            error = f"{fail_count} requests failed; giving up"
-                            raise DoneWithJobs
                     except asyncio.QueueEmpty:
                         await asyncio.sleep(0.005)  # reduce looping when waiting on responses
                     await asyncio.sleep(0.0001)

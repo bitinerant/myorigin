@@ -31,7 +31,8 @@ $ myorigin -v
 $ 
 $ myorigin --help
 usage: myorigin [-h] [-t TIMEOUT] [--minimum-match MINIMUM_MATCH]
-                [--overkill OVERKILL] [--max-failures MAX_FAILURES]
+                [--overkill OVERKILL] [--majority-ratio MAJORITY_RATIO]
+                [--max-failures MAX_FAILURES]
                 [--max-connections MAX_CONNECTIONS] [--dbfile DBFILE]
                 [--show-api-providers] [-4] [-6] [-l LOGFILE] [-q] [-v]
 
@@ -44,6 +45,12 @@ options:
                                      (default: 2)
   --overkill OVERKILL                number of initial requests to make beyond
                                      minimum-match (default: 0)
+  --majority-ratio MAJORITY_RATIO    minimum ratio needed to overrule a
+                                     conflicting response; must be an integer;
+                                     a value of 2 means 2:1, or that 6
+                                     responses of 8.7.8.7 are needed to
+                                     overrule 3 responses of 7.8.4.4 (default:
+                                     3)
   --max-failures MAX_FAILURES        maximum number of failed requests allowed
                                      (default: 10)
   --max-connections MAX_CONNECTIONS  maximum number of simultaneous network

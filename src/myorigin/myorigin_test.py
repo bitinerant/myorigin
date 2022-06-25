@@ -75,8 +75,14 @@ def test_my_ip_set3(caplog) -> None:
     myorigin.myorigin.init_db.__dict__.pop('engine', None)  # force Parrot.startup() to re-run
     test_flock_data = '''
         site48.com     site48.com/127.0.0.1         4 p
-        site40.com     site40.com/1a::18            6 s
-        site50.com     site50.com/2b::29            6 s
+        site51.com     site51.com/2b::29            6 s
+        site52.com     site52.com/bad::18           6 s
+        site53.com     site53.com/2b::29            6 s
+        site54.com     site54.com/2b::29            6 s
+        site55.com     site55.com/2b::29            6 s
+        site56.com     site56.com/2b::29            6 s
+        site57.com     site57.com/bad::18           6 s
+        site58.com     site58.com/2b::29            6 s
     '''
     myorigin.parrots.Parrot.startup.pytest = textwrap.dedent(test_flock_data)
     myorigin.myorigin.http_get.pytest = 1  # mock http_get()
@@ -91,10 +97,11 @@ def test_my_ip_set3(caplog) -> None:
         "http://site48.com/127.0.0.1 → Found non-global IP address 127.0.0.1"
         in caplog.records[1].message
     )
+    args.log_level = 4
     args.ip_version = 6
+    args.majority_ratio = 3  # 2 of 'bad::18', so need 6 to override
     caplog.clear()
-    myorigin.my_ip(args)
-    assert "multiple IPs received: {" in caplog.records[3].message
+    assert myorigin.my_ip(args) == '2b::29'  # rarely a test will succeed without receiving bad::18
     del myorigin.myorigin.http_get.pytest
 
 
@@ -125,7 +132,33 @@ def test_my_ip_set4(caplog) -> None:
     del myorigin.myorigin.http_get.pytest
 
 
-def test_my_ip_set1(caplog, capsys) -> None:
+def test_my_ip_set5(caplog) -> None:
+    myorigin.myorigin.init_db.__dict__.pop('engine', None)  # force Parrot.startup() to re-run
+    test_flock_data = '''
+        site51.com     site51.com/2b::29            6 s
+        site52.com     site52.com/bad::18           6 s
+        site53.com     site53.com/2b::29            6 s
+        site54.com     site54.com/2b::29            6 s
+        site55.com     site55.com/2b::29            6 s
+        site57.com     site57.com/bad::18           6 s
+    '''
+    myorigin.parrots.Parrot.startup.pytest = textwrap.dedent(test_flock_data)
+    myorigin.myorigin.http_get.pytest = 1  # mock http_get()
+    args = myorigin.MyoriginArgs()
+    args.dbfile = '-'
+    args.minimum_match = 5
+    args.log_level = 3
+    args.ip_version = 6
+    args.majority_ratio = 3  # 2 of 'bad::18', so need 6 to override
+    caplog.clear()
+    myorigin.my_ip(args)
+    assert "multiple IPs received: ['2b::29', 'bad::18']" in "; ".join(
+        [i.message for i in caplog.records]
+    )
+    del myorigin.myorigin.http_get.pytest
+
+
+def test_my_ip_set6(caplog, capsys) -> None:
     myorigin.myorigin.init_db.__dict__.pop('engine', None)  # force Parrot.startup() to re-run
     test_flock_data = '''
         site62.com     site62.com/x                 4 p
@@ -215,6 +248,68 @@ def test_my_ip_set1(caplog, capsys) -> None:
     del myorigin.myorigin.http_get.pytest
 
 
+def test_my_ip_set7(caplog, capsys) -> None:
+    while True:  # loop until weighted_random() selects at least one bad IP address
+        myorigin.myorigin.init_db.__dict__.pop('engine', None)  # force Parrot.startup() to re-run
+        test_flock_data = '''
+            site51.com     site51.com/118.4.122.98      4 p
+            site52.com     site52.com/170.250.18.80     4 p
+            site53.com     site53.com/118.4.122.98      4 p
+            site54.com     site54.com/118.4.122.98      4 p
+            site55.com     site55.com/118.4.122.98      4 p
+            site56.com     site56.com/118.4.122.98      4 p
+            site57.com     site57.com/170.250.18.80     4 p
+            site58.com     site58.com/118.4.122.98      4 p
+        '''
+        myorigin.parrots.Parrot.startup.pytest = textwrap.dedent(test_flock_data)
+        myorigin.myorigin.http_get.pytest = 1  # mock http_get()
+        args = myorigin.MyoriginArgs()
+        args.dbfile = '-'
+        args.minimum_match = 5
+        args.log_level = 4
+        args.ip_version = 4
+        args.majority_ratio = 3  # 2 of '170.250.18.80', so need 6 to override
+        assert (
+            myorigin.my_ip(args) == '118.4.122.98'
+        )  # rarely a test will succeed without receiving bad::18
+        myorigin.parrots.Parrot.show_parrot_db(myorigin.myorigin.init_db.engine)
+        captured = capsys.readouterr()
+        matches = ""
+        expected_parrot_db = '''
+            ipv4.http://site51.com/118.4.122.98:
+                100% success rate (1 of 1)
+                290 ms average round trip time
+                score: 122 points
+        '''
+        t = expected_parrot_db
+        matches += "A" if textwrap.dedent(t[1:]) in captured.out else "."
+        t = expected_parrot_db.replace('site51', 'site53')
+        matches += "B" if textwrap.dedent(t[1:]) in captured.out else "."
+        t = expected_parrot_db.replace('site51', 'site54')
+        matches += "C" if textwrap.dedent(t[1:]) in captured.out else "."
+        t = expected_parrot_db.replace('site51', 'site55')
+        matches += "D" if textwrap.dedent(t[1:]) in captured.out else "."
+        t = expected_parrot_db.replace('site51', 'site56')
+        matches += "E" if textwrap.dedent(t[1:]) in captured.out else "."
+        t = expected_parrot_db.replace('site51', 'site58')
+        matches += "F" if textwrap.dedent(t[1:]) in captured.out else "."
+        expected_parrot_db = '''
+            ipv4.http://site52.com/170.250.18.80:
+                0% success rate (0 of 1)
+                most recent error: Incorrect IP returned: 170.250.18.80
+                score: 10 points
+        '''
+        t = expected_parrot_db
+        matches += "G" if textwrap.dedent(t[1:]) in captured.out else "."
+        t = expected_parrot_db.replace('site52', 'site57')
+        matches += "H" if textwrap.dedent(t[1:]) in captured.out else "."
+        dots = matches.count(".")  # a dot represents unmodified site data
+        assert dots == 3 or dots == 2 or dots == 0, f"matches is {matches}"
+        if "G" in matches or "H" in matches:  # testing sufficient if it included an incorrect IP
+            break  # testing sufficient if it included an incorrect IP
+    del myorigin.myorigin.http_get.pytest
+
+
 def test_weighted_random() -> None:
     random.seed('YLLMFHALDNRHISAEIFHIAE')  # predictable 'random' results
     o = {200: 5, 202: 10, 203: 11, 210: 1, 214: 10}
@@ -222,3 +317,4 @@ def test_weighted_random() -> None:
     h = [k for k in [myorigin.myorigin.weighted_random(o) for i in range(n * sum(o.values()))]]
     r = dict(sorted({i: h.count(i) / n for i in h}.items()))
     assert r == {200: 5.06, 202: 9.85, 203: 10.76, 210: 0.85, 214: 10.48}
+    random.seed()  # make unpredictable again so other tests cover a broader range
