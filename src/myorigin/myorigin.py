@@ -317,7 +317,6 @@ def are_we_there_yet(completed_jobs, args, logger):
             raise NetworkError(f"{fail_count} requests failed; giving up")
         votes = Counter([r.ip for r in completed_jobs if (r.ip_version == v and r.rtt != 0)])
         if len(votes) == 0:
-            are_we_there_yet.__dict__.pop('found_multiple_ips', None)  # show again if needed
             continue
         ranked = sorted(votes.items(), key=lambda i: i[1], reverse=True)
         # ranked[0][0] is #1 candidate IP; ranked[0][1] is its vote count
@@ -340,6 +339,8 @@ def are_we_there_yet(completed_jobs, args, logger):
             # logger.info(f"{fail_count} fails for {len(completed_jobs)} jobs")
         top_ip_count = max(top_ip_count, ranked[0][1])
         top_ip_target = max(top_ip_target, target)
+    if top_ip_count == 0:
+        are_we_there_yet.__dict__.pop('found_multiple_ips', None)  # show again if needed
     return top_ip_count, top_ip_target
 
 

@@ -152,8 +152,10 @@ def test_my_ip_set5(caplog) -> None:
     args.majority_ratio = 3  # 2 of 'bad::18', so need 6 to override
     caplog.clear()
     myorigin.my_ip(args)
-    assert "multiple IPs received: ['2b::29', 'bad::18']" in "; ".join(
-        [i.message for i in caplog.records]
+    assert (
+        "multiple IPs received: ['2b::29', 'bad::18']"
+        or "multiple IPs received: ['bad::18', '2b::29']"
+        in "; ".join([i.message for i in caplog.records])
     )
     del myorigin.myorigin.http_get.pytest
 
