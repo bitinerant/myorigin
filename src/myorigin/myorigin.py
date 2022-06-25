@@ -38,7 +38,8 @@ def cli(return_help_text=False):
         "--minimum-match",
         type=int,
         default=2,
-        help="an IP address is considered valid after this number of idential responses (default: 2)",
+        help="an IP address is considered valid after this number of idential responses"
+        + " (default: 2)",
     )
     parser.add_argument(
         "--overkill",
@@ -340,7 +341,7 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                 votes[6] = dict()  # number of occurrences for each received IPv6
                 fail_count = 0
                 while True:  # spawn and collect jobs
-                    max_ipv0_count = 0  # max of IPv4 and IPv6
+                    top_ip_count = 0  # max of IPv4 and IPv6
                     for v in (4, 6):
                         max_ip_count = 0 if len(votes[v]) == 0 else max(votes[v].values())
                         if len(votes[v]) > 1:
@@ -352,26 +353,26 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                             logger.info(f"{msg} {fail_count} failures)")
                             result = ip
                             raise DoneWithJobs
-                        max_ipv0_count = max(max_ipv0_count, max_ip_count)
+                        top_ip_count = max(top_ip_count, max_ip_count)
                     # spawn another get_ip() job if needed
-                    wanted_count = args.minimum_match + args.overkill
-                    jobs_count = max_ipv0_count + pending_jobs_count
+                    top_ip_bonus = args.minimum_match + args.overkill
+                    jobs_count = top_ip_count + pending_jobs_count
                     if logger.isEnabledFor(logging.DEBUG):
                         try:
                             last_debug_msg = main_loop.last_debug_msg
                         except AttributeError:
                             last_debug_msg = ""
-                        msg = f"have {max_ipv0_count} IPs plus {pending_jobs_count} pending,"
-                        msg += f" want {wanted_count}, need {args.minimum_match}"
+                        msg = f"have {top_ip_count} IPs plus {pending_jobs_count} pending,"
+                        msg += f" want {top_ip_bonus}, need {args.minimum_match}"
                         if msg != last_debug_msg:  # avoid repeating the same message
                             logger.debug(msg)
                         main_loop.last_debug_msg = msg
-                    if args.overkill > 0 and wanted_count > jobs_count and len(scores) == 0:
-                        msg = f"not enough providers for {wanted_count} requests"
+                    if args.overkill > 0 and top_ip_bonus > jobs_count and len(scores) == 0:
+                        msg = f"not enough providers for {top_ip_bonus} requests"
                         logger.warning(f"{msg}; ignoring '--overkill'")
                         args.overkill = 0
-                        wanted_count = args.minimum_match + args.overkill
-                    if wanted_count > jobs_count and pending_jobs_count < args.max_connections:
+                        top_ip_bonus = args.minimum_match + args.overkill
+                    if top_ip_bonus > jobs_count and pending_jobs_count < args.max_connections:
                         # TCPConnector(limit=...) does this too, but checking args.max_connections
                         # ... here delays "not enough providers" so we can collect more responses
                         if len(scores) == 0:
