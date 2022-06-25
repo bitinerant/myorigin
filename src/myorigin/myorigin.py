@@ -308,13 +308,58 @@ def weighted_random(options: dict):
     assert False, f"bug in weighted_random, options {options}"
 
 
+def are_we_there_yet(completed_jobs, args, logger):
+    top_ip_count = 0  # max of IPv4 and IPv6
+    top_ip_target = args.minimum_match
+    for v in (4, 6):
+        fail_count = sum(1 for r in completed_jobs if r.rtt == 0)
+        if fail_count >= args.max_failures:
+            raise NetworkError(f"{fail_count} requests failed; giving up")
+        votes = Counter([r.ip for r in completed_jobs if (r.ip_version == v and r.rtt != 0)])
+        if len(votes) == 0:
+            continue
+        ranked = sorted(votes.items(), key=lambda i: i[1], reverse=True)
+        # ranked[0][0] is #1 candidate IP; ranked[0][1] is its vote count
+        assert sum(1 for r in completed_jobs if (r.rtt != 0 and r.ip == '')) == 0
+        if len(ranked) > 1:
+            logger.info(f"multiple IPs received: {[k[0] for k in ranked]}")
+        overrule = 0 if len(ranked) <= 1 else ranked[1][1] * args.majority_ratio
+        target = max(args.minimum_match, overrule)  # votes necessary to win
+        if ranked[0][1] >= target:  # #1 candidate has enough votes
+            ip = ranked[0][0]
+            msg = f"IP found: {ip} ({ranked[0][1]} successes,"
+            logger.info(f"{msg} {fail_count} failures)")
+            if len(ranked) > 1:  # retroactively mark other candidates as failed
+                for r in completed_jobs:
+                    if r.ip_version == v and r.rtt != 0 and r.ip != ip:
+                        r.rtt = 0  # actually, it failed
+                        r.ip = f'Incorrect IP returned: {r.ip}'
+            raise DoneWithJobs(ip)
+            # logger.info(f"{fail_count} fails for {len(completed_jobs)} jobs")
+        top_ip_count = max(top_ip_count, ranked[0][1])
+        top_ip_target = max(top_ip_target, target)
+    return top_ip_count, top_ip_target
+
+
+def log_debug_details(logger, top_ip_count, pending_jobs_count, top_ip_bonus, top_ip_target):
+    if logger.isEnabledFor(logging.DEBUG):
+        try:
+            last_debug_msg = main_loop.last_debug_msg
+        except AttributeError:
+            last_debug_msg = ""
+        msg = f"have {top_ip_count} IPs plus {pending_jobs_count} pending,"
+        msg += f" want {top_ip_bonus}, need {top_ip_target}"
+        if msg != last_debug_msg:  # avoid repeating the same message
+            logger.debug(msg)
+        main_loop.last_debug_msg = msg
+
+
 class DoneWithJobs(Exception):
     pass
 
 
 async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
     result = ""
-    error = None
     engine = init_db(args.dbfile)
     with Session(engine) as db_session:
         scores = dict()
@@ -347,62 +392,26 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                 logger.info(f"requests (need {args.minimum_match} matches):")
                 pending_jobs_count = 0
                 while True:  # spawn and collect jobs
-                    top_ip_count = 0  # max of IPv4 and IPv6
-                    top_ip_target = args.minimum_match
-                    for v in (4, 6):
-                        fail_count = sum(1 for r in completed_jobs if r.rtt == 0)
-                        if fail_count >= args.max_failures:
-                            error = f"{fail_count} requests failed; giving up"
-                            raise DoneWithJobs
-                        votes = Counter(
-                            [r.ip for r in completed_jobs if (r.ip_version == v and r.rtt != 0)]
-                        )
-                        if len(votes) == 0:
-                            continue
-                        ranked = sorted(votes.items(), key=lambda i: i[1], reverse=True)
-                        # ranked[0][0] is #1 candidate IP; ranked[0][1] is its vote count
-                        assert sum(1 for r in completed_jobs if (r.rtt != 0 and r.ip == '')) == 0
-                        if len(ranked) > 1:
-                            logger.info(f"multiple IPs received: {[k[0] for k in ranked]}")
-                        overrule = 0 if len(ranked) <= 1 else ranked[1][1] * args.majority_ratio
-                        target = max(args.minimum_match, overrule)  # votes necessary to win
-                        if ranked[0][1] >= target:  # #1 candidate has enough votes
-                            result = ranked[0][0]
-                            msg = f"IP found: {result} ({ranked[0][1]} successes,"
-                            logger.info(f"{msg} {fail_count} failures)")
-                            if len(ranked) > 1:  # retroactively mark other candidates as failed
-                                for r in completed_jobs:
-                                    if r.ip_version == v and r.rtt != 0 and r.ip != result:
-                                        r.rtt = 0  # actually, it failed
-                                        r.ip = f'Incorrect IP returned: {r.ip}'
-                            raise DoneWithJobs
-                        # logger.info(f"{fail_count} fails for {len(completed_jobs)} jobs")
-                        top_ip_count = max(top_ip_count, ranked[0][1])
-                        top_ip_target = max(top_ip_target, target)
-                    # spawn another get_ip() job if needed
+                    # calculate what is still needed
+                    top_ip_count, top_ip_target = are_we_there_yet(completed_jobs, args, logger)
                     top_ip_bonus = top_ip_target + args.overkill
                     jobs_count = top_ip_count + pending_jobs_count
-                    if logger.isEnabledFor(logging.DEBUG):
-                        try:
-                            last_debug_msg = main_loop.last_debug_msg
-                        except AttributeError:
-                            last_debug_msg = ""
-                        msg = f"have {top_ip_count} IPs plus {pending_jobs_count} pending,"
-                        msg += f" want {top_ip_bonus}, need {top_ip_target}"
-                        if msg != last_debug_msg:  # avoid repeating the same message
-                            logger.debug(msg)
-                        main_loop.last_debug_msg = msg
+                    # logging, overkill check
+                    log_debug_details(
+                        logger, top_ip_count, pending_jobs_count, top_ip_bonus, top_ip_target
+                    )
                     if args.overkill > 0 and top_ip_bonus > jobs_count and len(scores) == 0:
                         msg = f"not enough providers for {top_ip_bonus} requests"
                         logger.warning(f"{msg}; ignoring '--overkill'")
                         args.overkill = 0
                         top_ip_bonus = top_ip_target + args.overkill
+                    # spawn another get_ip() job if needed
                     if top_ip_bonus > jobs_count and pending_jobs_count < args.max_connections:
                         # TCPConnector(limit=...) does this too, but checking args.max_connections
                         # ... here delays "not enough providers" so we can collect more responses
                         if len(scores) == 0:
                             error = f"not enough providers for {args.minimum_match} matches"
-                            raise DoneWithJobs
+                            raise NetworkError(error)
                         p_id = weighted_random(scores)
                         statement = select(Parrot).where(Parrot.id == p_id)
                         p = db_session.exec(statement).one_or_none()
@@ -429,8 +438,12 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                     except asyncio.QueueEmpty:
                         await asyncio.sleep(0.005)  # reduce looping when waiting on responses
                     await asyncio.sleep(0.0001)
-            except DoneWithJobs:
-                pass
+            except DoneWithJobs as e:
+                result = str(e)
+            except NetworkError as e:
+                logger.error(e)
+                if args.exception_level >= 1:
+                    raise NetworkError(e)
         await connector.close()
         for r in completed_jobs:
             r.parrot.attempt_count += 1
@@ -441,10 +454,6 @@ async def main_loop(args: MyoriginArgs, logger: logging.Logger) -> str:
                 r.parrot.last_errmsg = r.ip
             db_session.add(r.parrot)
             db_session.commit()
-    if error is not None:
-        logger.error(error)
-        if args.exception_level >= 1:
-            raise NetworkError(error)
     return result
 
 
