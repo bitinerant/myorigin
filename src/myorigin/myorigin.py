@@ -317,11 +317,13 @@ def are_we_there_yet(completed_jobs, args, logger):
             raise NetworkError(f"{fail_count} requests failed; giving up")
         votes = Counter([r.ip for r in completed_jobs if (r.ip_version == v and r.rtt != 0)])
         if len(votes) == 0:
+            are_we_there_yet.__dict__.pop('found_multiple_ips', None)  # show again if needed
             continue
         ranked = sorted(votes.items(), key=lambda i: i[1], reverse=True)
         # ranked[0][0] is #1 candidate IP; ranked[0][1] is its vote count
         assert sum(1 for r in completed_jobs if (r.rtt != 0 and r.ip == '')) == 0
-        if len(ranked) > 1:
+        if len(ranked) > 1 and not hasattr(are_we_there_yet, 'found_multiple_ips'):
+            are_we_there_yet.found_multiple_ips = True  # only show once
             logger.info(f"multiple IPs received: {[k[0] for k in ranked]}")
         overrule = 0 if len(ranked) <= 1 else ranked[1][1] * args.majority_ratio
         target = max(args.minimum_match, overrule)  # votes necessary to win
